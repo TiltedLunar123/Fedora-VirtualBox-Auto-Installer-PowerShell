@@ -24,6 +24,18 @@
       password: fedora
 
     Change those with -GuestUsername / -GuestPassword.
+
+.EXAMPLE
+    .\New-FedoraVirtualBoxVM.ps1 -Force
+    Provisions a default Fedora Workstation VM, replacing any existing one.
+
+.EXAMPLE
+    .\New-FedoraVirtualBoxVM.ps1 -VMName "MyFedora" -GuestUsername "admin" -Force
+    Provisions a custom-named VM with a different guest username.
+
+.EXAMPLE
+    .\New-FedoraVirtualBoxVM.ps1 -ISOPath "C:\ISOs\Fedora-Everything-netinst-x86_64-43-1.1.iso" -Force
+    Uses a local ISO file instead of downloading one.
 #>
 
 [CmdletBinding()]

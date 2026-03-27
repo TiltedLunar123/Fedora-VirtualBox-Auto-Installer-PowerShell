@@ -1,0 +1,37 @@
+# ISO images
+*.iso
+
+# VirtualBox disk images
+*.vdi
+*.vmdk
+*.vhd
+*.vhdx
+*.ova
+*.ovf
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# Windows
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+
+# macOS
+.DS_Store
+._*
+
+# PowerShell / Editor
+*.ps1xml
+*.pssc
+*.psd1.bak
+.vscode/
+*.suo
+*.user
+*.sln.docstates
