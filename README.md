@@ -1,29 +1,14 @@
 # Fedora VirtualBox Auto-Installer (PowerShell)
 
-Fully automatic Fedora GNOME VM provisioning for VirtualBox on Windows.
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue.svg?logo=powershell)](https://docs.microsoft.com/en-us/powershell/)
+[![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6.svg?logo=windows)](https://www.microsoft.com/windows)
 
-This script creates a Fedora VM from scratch, feeds the installer a real Kickstart file through an attached `OEMDRV` disk, waits for the install to finish, removes the installer media, and boots the completed VM. It is built to do the whole job with as little manual input as possible.
-
----
-
-## What It Does
-
-- Detects your system specs (CPU, RAM, disk, GPU)
-- Calculates a sensible VM configuration automatically
-- Finds or downloads the Fedora **Everything netinstall** ISO
-- Creates a VirtualBox VM with optimized defaults
-- Builds a small `OEMDRV` VHD containing `ks.cfg`
-- Boots the Fedora installer and lets Kickstart handle the install automatically
-- Waits for the VM to power off when installation is done
-- Detaches the ISO and temporary Kickstart disk
-- Boots the finished Fedora VM
-- Creates helper scripts for starting, stopping, and SSHing into the VM
-
----
+Fully automatic Fedora GNOME VM provisioning for VirtualBox on Windows. Creates a VM from scratch, feeds the installer a real Kickstart file through an attached `OEMDRV` disk, waits for the install to finish, removes the installer media, and boots the completed VM.
 
 ## Why This Script Exists
 
-Most "automatic Fedora VM" scripts are half real and half fake. They either generate a Kickstart file but never actually use it, rely on Fedora Live ISOs that are not the right path for a real unattended install, or depend on brittle VirtualBox unattended behavior and then fall apart.
+Most "automatic Fedora VM" scripts either generate a Kickstart file but never actually use it, rely on Fedora Live ISOs that aren't the right path for unattended installs, or depend on brittle VirtualBox unattended behavior that falls apart.
 
 This script takes the cleaner route:
 
@@ -31,33 +16,27 @@ This script takes the cleaner route:
 - **Real Kickstart automation** via OEMDRV
 - **OEMDRV disk auto-detected** by the Fedora installer natively
 
----
+## What It Does
+
+1. Detects your system specs (CPU, RAM, disk, GPU)
+2. Calculates a sensible VM configuration automatically
+3. Finds or downloads the Fedora **Everything netinstall** ISO
+4. Creates a VirtualBox VM with optimized defaults
+5. Builds a small `OEMDRV` VHD containing `ks.cfg`
+6. Boots the Fedora installer — Kickstart handles the rest
+7. Waits for the VM to power off when installation completes
+8. Detaches the ISO and temporary Kickstart disk
+9. Boots the finished Fedora VM
+10. Creates helper scripts for starting, stopping, and SSHing into the VM
 
 ## Requirements
 
-- **Windows** (10 or 11)
+- **Windows** 10 or 11
 - **PowerShell** running **as Administrator**
 - **Oracle VirtualBox** installed ([download](https://www.virtualbox.org/wiki/Downloads))
 - Hardware virtualization enabled in BIOS/UEFI (VT-x or AMD-V)
 - Hyper-V / VBS not interfering with VirtualBox
-- Working internet connection (Fedora netinstall needs to download packages)
-- Enough disk space for the Fedora ISO, VM disk, and temporary OEMDRV VHD
-
----
-
-## Default Behavior
-
-| Setting      | Default Value                           |
-| ------------ | --------------------------------------- |
-| VM Name      | `Fedora-Workstation`                    |
-| Fedora       | `43`                                    |
-| VM Location  | `C:\Users\<you>\VirtualBox VMs`         |
-| Username     | `user`                                  |
-| Password     | `fedora`                                |
-| Hostname     | `fedora-vm`                             |
-| SSH Forward  | `localhost:2222` -> `guest:22`          |
-
----
+- Working internet connection (netinstall downloads packages)
 
 ## Usage
 
@@ -85,25 +64,23 @@ This script takes the cleaner route:
 .\New-FedoraVirtualBoxVM.ps1 -Force -Headless
 ```
 
-### All Parameters
+## Parameters
 
-| Parameter               | Type     | Description                                    |
-| ----------------------- | -------- | ---------------------------------------------- |
-| `-VMName`               | String   | Name for the VM (default: `Fedora-Workstation`) |
-| `-FedoraVersion`        | String   | Fedora release version (default: `43`)          |
-| `-VMBaseDir`            | String   | Base directory for VMs                          |
-| `-ISOPath`              | String   | Path to a local Fedora Everything netinstall ISO |
-| `-GuestUsername`        | String   | Guest OS username (default: `user`)              |
-| `-GuestPassword`        | String   | Guest OS password (default: `fedora`)            |
-| `-GuestHostname`        | String   | Guest OS hostname (default: `fedora-vm`)         |
-| `-GuestTimezone`        | String   | Timezone (default: `America/New_York`)           |
-| `-SSHHostPort`          | Int      | Host port for SSH forwarding (default: `2222`)   |
-| `-InstallTimeoutMinutes`| Int      | Max wait for install (default: `90`)             |
-| `-SkipDownload`         | Switch   | Skip auto-download; prompts for ISO file         |
-| `-Force`                | Switch   | Replace existing VM with the same name           |
-| `-Headless`             | Switch   | Run the VM without a GUI window                  |
-
----
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `-VMName` | String | `Fedora-Workstation` | Name for the VM |
+| `-FedoraVersion` | String | `43` | Fedora release version |
+| `-VMBaseDir` | String | `~/VirtualBox VMs` | Base directory for VMs |
+| `-ISOPath` | String | — | Path to a local Fedora Everything netinstall ISO |
+| `-GuestUsername` | String | `user` | Guest OS username |
+| `-GuestPassword` | String | `fedora` | Guest OS password |
+| `-GuestHostname` | String | `fedora-vm` | Guest OS hostname |
+| `-GuestTimezone` | String | `America/New_York` | Timezone |
+| `-SSHHostPort` | Int | `2222` | Host port for SSH forwarding |
+| `-InstallTimeoutMinutes` | Int | `90` | Max wait for install |
+| `-SkipDownload` | Switch | — | Skip auto-download; prompts for ISO file |
+| `-Force` | Switch | — | Replace existing VM with the same name |
+| `-Headless` | Switch | — | Run the VM without a GUI window |
 
 ## Files Created
 
@@ -113,18 +90,14 @@ Inside the VM folder, the script creates:
 - An `_autoinstall` folder with `ks.cfg` and `OEMDRV.vhd`
 - Helper scripts: `Start-VM.bat`, `Stop-VM.bat`, `SSH-Connect.bat`
 
----
-
 ## Connecting via SSH
 
-After the VM boots, connect with:
+After the VM boots:
 
 ```bash
 ssh -p 2222 user@localhost
 ```
 
----
-
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+[MIT](LICENSE)
