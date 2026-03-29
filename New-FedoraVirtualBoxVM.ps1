@@ -1,23 +1,26 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Fully automatic Fedora GNOME VM provisioner for VirtualBox on Windows.
+    Fully automatic RHEL-family VM provisioner for VirtualBox on Windows.
 
 .DESCRIPTION
     - Detects host specs
-    - Downloads Fedora Everything netinstall ISO
+    - Downloads Fedora/CentOS-Stream/AlmaLinux/Rocky Everything netinstall ISO
+    - Verifies ISO checksum (SHA256) when downloading
     - Creates an optimized VirtualBox VM
-    - Creates a tiny OEMDRV VHD containing ks.cfg
-    - Boots Fedora installer, which auto-loads ks.cfg
+    - Creates a tiny OEMDRV VHD containing ks.cfg (with SHA-512 hashed password)
+    - Boots the installer, which auto-loads ks.cfg
     - Waits for install completion (guest powers off)
     - Detaches install media + OEMDRV disk
-    - Boots the finished Fedora Workstation VM
+    - Cleans up sensitive install artifacts
+    - Boots the finished VM
+    - Supports resume/checkpoint on re-run
 
 .NOTES
     Honest version:
-    - Uses Fedora Everything netinstall, not Workstation Live
+    - Uses Everything netinstall, not Workstation Live
     - Uses real Kickstart automation via OEMDRV
-    - Avoids pretending VBox unattended magically handles Fedora desktop installs
+    - Avoids pretending VBox unattended magically handles desktop installs
 
     Default login:
       user:     user
@@ -36,6 +39,14 @@
 .EXAMPLE
     .\New-FedoraVirtualBoxVM.ps1 -ISOPath "C:\ISOs\Fedora-Everything-netinst-x86_64-43-1.1.iso" -Force
     Uses a local ISO file instead of downloading one.
+
+.EXAMPLE
+    .\New-FedoraVirtualBoxVM.ps1 -Distro "AlmaLinux" -Force
+    Provisions an AlmaLinux VM instead of Fedora.
+
+.EXAMPLE
+    .\New-FedoraVirtualBoxVM.ps1 -Validate
+    Runs all pre-flight checks without creating anything.
 #>
 
 [CmdletBinding()]
@@ -52,7 +63,14 @@ param(
     [int]$InstallTimeoutMinutes = 90,
     [switch]$SkipDownload,
     [switch]$Force,
-    [switch]$Headless
+    [switch]$Headless,
+    [ValidateSet("Fedora","CentOS-Stream","AlmaLinux","Rocky")]
+    [string]$Distro = "Fedora",
+    [switch]$Validate,
+    [switch]$KeepArtifacts,
+    [switch]$NoResume,
+    [switch]$SecureSudo,
+    [string]$SharedFolder
 )
 
 Set-StrictMode -Version Latest
@@ -68,11 +86,19 @@ $Script:Colors = @{
     Accent  = "Magenta"
 }
 
+# Emoji fallback for old terminals
+$Script:UseEmoji = $null -ne $env:WT_SESSION -or $Host.UI.SupportsVirtualTerminal
+$Script:Icons = if ($Script:UseEmoji) {
+    @{ Running="⚡"; Done="✅"; Warn="⚠️"; Error="❌"; Info="ℹ️" }
+} else {
+    @{ Running=">>"; Done="OK"; Warn="!!"; Error="XX"; Info="--" }
+}
+
 function Write-Banner {
     $banner = @"
 
     ╔══════════════════════════════════════════════════════════╗
-    ║     FEDORA VIRTUALBOX AUTO-PROVISIONER v4.0             ║
+    ║     VIRTUALBOX AUTO-PROVISIONER v5.0                    ║
     ║     Real Kickstart Automation via OEMDRV                ║
     ╚══════════════════════════════════════════════════════════╝
 
@@ -88,11 +114,11 @@ function Write-Step {
     )
 
     $icon = switch ($Status) {
-        "RUNNING" { "⚡" }
-        "DONE"    { "✅" }
-        "WARN"    { "⚠️" }
-        "ERROR"   { "❌" }
-        "INFO"    { "ℹ️" }
+        "RUNNING" { $Script:Icons.Running }
+        "DONE"    { $Script:Icons.Done }
+        "WARN"    { $Script:Icons.Warn }
+        "ERROR"   { $Script:Icons.Error }
+        "INFO"    { $Script:Icons.Info }
     }
 
     $color = switch ($Status) {
@@ -106,6 +132,119 @@ function Write-Step {
     Write-Host "  $icon " -NoNewline -ForegroundColor $color
     Write-Host $Message -ForegroundColor $color
 }
+
+# --- Distro configuration ---
+
+function Get-DistroConfig {
+    param(
+        [Parameter(Mandatory)][string]$Distro,
+        [Parameter(Mandatory)][string]$Version
+    )
+
+    switch ($Distro) {
+        "Fedora" {
+            return @{
+                ISOIndexUrl     = "https://download.fedoraproject.org/pub/fedora/linux/releases/$Version/Everything/x86_64/iso/"
+                ISOPattern      = "Fedora-Everything-netinst-x86_64-$Version-[0-9.]+"
+                PackageGroup    = "@^workstation-product-environment"
+                DefaultHostname = "fedora-vm"
+                OSType          = "Fedora_64"
+            }
+        }
+        "CentOS-Stream" {
+            return @{
+                ISOIndexUrl     = "https://mirrors.centos.org/mirrorlist?path=/SIGs/$Version-stream/BaseOS/x86_64/iso/&redirect=1&protocol=https"
+                ISOPattern      = "CentOS-Stream-$Version-latest-x86_64-dvd1"
+                PackageGroup    = "@^server-product-environment"
+                DefaultHostname = "centos-vm"
+                OSType          = "RedHat_64"
+            }
+        }
+        "AlmaLinux" {
+            return @{
+                ISOIndexUrl     = "https://repo.almalinux.org/almalinux/$Version/isos/x86_64/"
+                ISOPattern      = "AlmaLinux-$Version[0-9.]*-x86_64-dvd"
+                PackageGroup    = "@^server-product-environment"
+                DefaultHostname = "alma-vm"
+                OSType          = "RedHat_64"
+            }
+        }
+        "Rocky" {
+            return @{
+                ISOIndexUrl     = "https://download.rockylinux.org/pub/rocky/$Version/isos/x86_64/"
+                ISOPattern      = "Rocky-$Version[0-9.]*-x86_64-dvd"
+                PackageGroup    = "@^server-product-environment"
+                DefaultHostname = "rocky-vm"
+                OSType          = "RedHat_64"
+            }
+        }
+    }
+}
+
+# --- SHA-512 password hashing ---
+
+function New-SHA512CryptHash {
+    param([string]$Password)
+
+    $openssl = Get-Command openssl -ErrorAction SilentlyContinue
+    if ($openssl) {
+        $hash = & openssl passwd -6 $Password 2>$null
+        if ($LASTEXITCODE -eq 0 -and $hash) { return $hash }
+    }
+
+    $python = Get-Command python3 -ErrorAction SilentlyContinue
+    if (-not $python) { $python = Get-Command python -ErrorAction SilentlyContinue }
+    if ($python) {
+        $hash = & $python.Source -c "import crypt; print(crypt.crypt('$Password', crypt.mksalt(crypt.METHOD_SHA512)))" 2>$null
+        if ($LASTEXITCODE -eq 0 -and $hash) { return $hash }
+    }
+
+    return $null
+}
+
+# --- Provision state management ---
+
+function Get-ProvisionState {
+    param([Parameter(Mandatory)][string]$StatePath)
+
+    if (Test-Path $StatePath) {
+        try {
+            return (Get-Content $StatePath -Raw | ConvertFrom-Json)
+        }
+        catch {
+            return $null
+        }
+    }
+    return $null
+}
+
+function Save-ProvisionState {
+    param(
+        [Parameter(Mandatory)][string]$StatePath,
+        [Parameter(Mandatory)][hashtable]$State
+    )
+
+    $dir = Split-Path -Parent $StatePath
+    if (-not (Test-Path $dir)) {
+        New-Item -Path $dir -ItemType Directory -Force | Out-Null
+    }
+
+    $State | ConvertTo-Json -Depth 5 | Out-File -FilePath $StatePath -Encoding utf8 -Force
+}
+
+function Test-StepCompleted {
+    param(
+        [object]$State,
+        [string]$StepName
+    )
+
+    if ($null -eq $State) { return $false }
+    $val = $State.PSObject.Properties[$StepName]
+    if ($null -eq $val) { return $false }
+    return [bool]$val.Value
+}
+
+# --- Core utility functions ---
 
 function Invoke-ExternalCommand {
     param(
@@ -148,7 +287,7 @@ function Invoke-VBoxManage {
 }
 
 function Test-HostVirtualizationWarnings {
-    Write-Host "`n  ── Host Checks ──" -ForegroundColor $Script:Colors.Header
+    Write-Host "`n  -- Host Checks --" -ForegroundColor $Script:Colors.Header
 
     try {
         $hv = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -ErrorAction Stop
@@ -164,7 +303,7 @@ function Test-HostVirtualizationWarnings {
 }
 
 function Get-SystemSpecs {
-    Write-Host "`n  ── System Detection ──" -ForegroundColor $Script:Colors.Header
+    Write-Host "`n  -- System Detection --" -ForegroundColor $Script:Colors.Header
 
     $cpu = Get-CimInstance -ClassName Win32_Processor
     $totalCores = ($cpu | Measure-Object -Property NumberOfCores -Sum).Sum
@@ -225,7 +364,7 @@ function Get-SystemSpecs {
 function Get-OptimalVMConfig {
     param([Parameter(Mandatory)][PSCustomObject]$Specs)
 
-    Write-Host "`n  ── Calculating Optimal VM Config ──" -ForegroundColor $Script:Colors.Header
+    Write-Host "`n  -- Calculating Optimal VM Config --" -ForegroundColor $Script:Colors.Header
 
     $vmCPUs = [math]::Max(2, [math]::Min(8, [math]::Floor($Specs.LogicalCores * 0.5)))
     if ($vmCPUs -lt 2) { $vmCPUs = 2 }
@@ -267,7 +406,7 @@ function Get-OptimalVMConfig {
 }
 
 function Find-VBoxManage {
-    Write-Host "`n  ── Locating VirtualBox ──" -ForegroundColor $Script:Colors.Header
+    Write-Host "`n  -- Locating VirtualBox --" -ForegroundColor $Script:Colors.Header
 
     $candidates = @()
 
@@ -301,13 +440,88 @@ function Get-FreeDriveLetter {
     throw "No free drive letter available."
 }
 
+# --- ISO checksum verification ---
+
+function Test-ISOChecksum {
+    param(
+        [Parameter(Mandatory)][string]$ISOPath,
+        [Parameter(Mandatory)][string]$IndexUrl
+    )
+
+    Write-Host "`n  -- Verifying ISO Checksum --" -ForegroundColor $Script:Colors.Header
+
+    try {
+        $listing = Invoke-WebRequest -Uri $IndexUrl -UseBasicParsing
+    }
+    catch {
+        Write-Step "Could not fetch index listing for checksum verification. Skipping." "WARN"
+        return
+    }
+
+    $checksumMatches = [regex]::Matches($listing.Content, '[^">\s]+CHECKSUM[^"<\s]*') |
+        ForEach-Object { $_.Value } |
+        Select-Object -Unique
+
+    if (-not $checksumMatches -or $checksumMatches.Count -eq 0) {
+        Write-Step "No CHECKSUM file found in index listing. Skipping verification." "WARN"
+        return
+    }
+
+    $checksumFile = $checksumMatches | Select-Object -First 1
+    $checksumUrl = "$IndexUrl$checksumFile"
+
+    Write-Step "Downloading checksum file: $checksumFile" "RUNNING"
+    try {
+        $checksumContent = (Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing).Content
+    }
+    catch {
+        Write-Step "Could not download checksum file. Skipping verification." "WARN"
+        return
+    }
+
+    $isoFileName = Split-Path -Leaf $ISOPath
+    $expectedHash = $null
+
+    foreach ($line in ($checksumContent -split "`r?`n")) {
+        if ($line -match "SHA256\s*\(([^)]+)\)\s*=\s*([a-fA-F0-9]{64})") {
+            if ($Matches[1] -eq $isoFileName) {
+                $expectedHash = $Matches[2].ToLower()
+                break
+            }
+        }
+        elseif ($line -match "^([a-fA-F0-9]{64})\s+\*?(.+)$") {
+            if ($Matches[2].Trim() -eq $isoFileName) {
+                $expectedHash = $Matches[1].ToLower()
+                break
+            }
+        }
+    }
+
+    if (-not $expectedHash) {
+        Write-Step "Could not find SHA256 hash for $isoFileName in checksum file. Skipping." "WARN"
+        return
+    }
+
+    Write-Step "Computing SHA256 hash of ISO (this may take a moment)..." "RUNNING"
+    $actualHash = (Get-FileHash -Path $ISOPath -Algorithm SHA256).Hash.ToLower()
+
+    if ($actualHash -ne $expectedHash) {
+        throw "ISO checksum mismatch!`n  Expected: $expectedHash`n  Actual:   $actualHash`n  The downloaded ISO may be corrupted. Delete it and retry."
+    }
+
+    Write-Step "ISO checksum verified (SHA256 match)" "DONE"
+}
+
 function Get-FedoraNetinstISO {
     param(
         [Parameter(Mandatory)][string]$Version,
-        [string]$ProvidedISOPath
+        [string]$ProvidedISOPath,
+        [Parameter(Mandatory)][string]$DistroName
     )
 
-    Write-Host "`n  ── Fedora Netinstall ISO ──" -ForegroundColor $Script:Colors.Header
+    Write-Host "`n  -- $DistroName Netinstall ISO --" -ForegroundColor $Script:Colors.Header
+
+    $distroConfig = Get-DistroConfig -Distro $DistroName -Version $Version
 
     if ($ProvidedISOPath) {
         if (-not (Test-Path $ProvidedISOPath)) {
@@ -323,7 +537,8 @@ function Get-FedoraNetinstISO {
         New-Item -Path $downloadDir -ItemType Directory -Force | Out-Null
     }
 
-    $existing = Get-ChildItem -Path $downloadDir -Filter "Fedora-Everything-netinst-x86_64-$Version-*.iso" -File -ErrorAction SilentlyContinue |
+    $isoPattern = $distroConfig.ISOPattern
+    $existing = Get-ChildItem -Path $downloadDir -Filter "$($isoPattern -replace '\[.+\]','*').iso" -File -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
 
@@ -335,7 +550,7 @@ function Get-FedoraNetinstISO {
     if ($SkipDownload) {
         Add-Type -AssemblyName System.Windows.Forms
         $dialog = New-Object System.Windows.Forms.OpenFileDialog
-        $dialog.Title = "Select Fedora Everything netinstall ISO"
+        $dialog.Title = "Select $DistroName Everything netinstall ISO"
         $dialog.Filter = "ISO files (*.iso)|*.iso"
         $dialog.InitialDirectory = $downloadDir
         if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
@@ -345,23 +560,23 @@ function Get-FedoraNetinstISO {
         throw "No ISO selected."
     }
 
-    $indexUrl = "https://download.fedoraproject.org/pub/fedora/linux/releases/$Version/Everything/x86_64/iso/"
-    Write-Step "Resolving latest Fedora Everything netinstall ISO..." "RUNNING"
+    $indexUrl = $distroConfig.ISOIndexUrl
+    Write-Step "Resolving latest $DistroName ISO..." "RUNNING"
 
     try {
         $listing = Invoke-WebRequest -Uri $indexUrl -UseBasicParsing
     }
     catch {
-        throw "Failed to access Fedora release directory: $indexUrl"
+        throw "Failed to access release directory: $indexUrl"
     }
 
-    $matches = [regex]::Matches($listing.Content, "Fedora-Everything-netinst-x86_64-$Version-[0-9.]+\.iso") |
+    $isoMatches = [regex]::Matches($listing.Content, "$isoPattern\.iso") |
         ForEach-Object { $_.Value } |
         Select-Object -Unique
 
-    $isoName = $matches | Sort-Object -Descending | Select-Object -First 1
+    $isoName = $isoMatches | Sort-Object -Descending | Select-Object -First 1
     if (-not $isoName) {
-        throw "Could not resolve a Fedora Everything netinstall ISO name from $indexUrl"
+        throw "Could not resolve a $DistroName ISO name from $indexUrl"
     }
 
     $isoUrl = "$indexUrl$isoName"
@@ -369,7 +584,7 @@ function Get-FedoraNetinstISO {
 
     Write-Step "Downloading $isoName ..." "RUNNING"
     try {
-        Start-BitsTransfer -Source $isoUrl -Destination $isoPath -Description "Downloading Fedora Everything netinstall ISO"
+        Start-BitsTransfer -Source $isoUrl -Destination $isoPath -Description "Downloading $DistroName ISO"
     }
     catch {
         Invoke-WebRequest -Uri $isoUrl -OutFile $isoPath -UseBasicParsing
@@ -378,6 +593,9 @@ function Get-FedoraNetinstISO {
     if (-not (Test-Path $isoPath)) {
         throw "ISO download failed."
     }
+
+    # Verify checksum for downloaded ISOs
+    Test-ISOChecksum -ISOPath $isoPath -IndexUrl $indexUrl
 
     Write-Step "ISO ready: $isoPath" "DONE"
     return $isoPath
@@ -389,10 +607,57 @@ function New-KickstartFile {
         [Parameter(Mandatory)][string]$Username,
         [Parameter(Mandatory)][string]$Password,
         [Parameter(Mandatory)][string]$Hostname,
-        [Parameter(Mandatory)][string]$Timezone
+        [Parameter(Mandatory)][string]$Timezone,
+        [Parameter(Mandatory)][string]$PackageGroup,
+        [switch]$SecureSudoMode,
+        [string]$SharedFolderName
     )
 
-    Write-Host "`n  ── Creating Kickstart ──" -ForegroundColor $Script:Colors.Header
+    Write-Host "`n  -- Creating Kickstart --" -ForegroundColor $Script:Colors.Header
+
+    # Attempt to hash the password with SHA-512
+    $passwordHash = New-SHA512CryptHash -Password $Password
+    if ($passwordHash) {
+        $userLine = "user --name=$Username --password=$passwordHash --iscrypted --groups=wheel"
+        Write-Step "Password will be stored as SHA-512 hash in Kickstart" "DONE"
+    } else {
+        $userLine = "user --name=$Username --password=$Password --plaintext --groups=wheel"
+        Write-Step "Could not hash password (openssl/python not found). Using plaintext in Kickstart." "WARN"
+    }
+
+    # Sudoers line
+    $sudoersLine = if ($SecureSudoMode) {
+        "echo `"$Username ALL=(ALL) ALL`" > /etc/sudoers.d/90-$Username"
+    } else {
+        "echo `"$Username ALL=(ALL) NOPASSWD: ALL`" > /etc/sudoers.d/90-$Username"
+    }
+
+    # Shared folder post-install block
+    $sharedFolderPost = ""
+    if ($SharedFolderName) {
+        $sharedFolderPost = @"
+
+# Guest Additions and shared folder setup
+dnf install -y gcc kernel-devel kernel-headers dkms make bzip2 perl || true
+mkdir -p /mnt/shared
+echo 'vboxsf' > /etc/modules-load.d/vboxsf.conf
+cat > /etc/systemd/system/mount-vbox-shared.service <<'SVCEOF'
+[Unit]
+Description=Mount VirtualBox Shared Folder
+After=vboxadd.service
+Requires=vboxadd.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/mount -t vboxsf $SharedFolderName /mnt/shared -o uid=1000,gid=1000
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+systemctl enable mount-vbox-shared.service || true
+"@
+    }
 
     $ks = @"
 #version=DEVEL
@@ -405,7 +670,7 @@ timezone $Timezone --utc
 network --bootproto=dhcp --device=link --activate --hostname=$Hostname
 
 rootpw --lock
-user --name=$Username --password=$Password --plaintext --groups=wheel
+$userLine
 
 firewall --enabled --service=ssh
 selinux --enforcing
@@ -424,7 +689,7 @@ bootloader --location=boot
 shutdown
 
 %packages
-@^workstation-product-environment
+$PackageGroup
 openssh-server
 sudo
 curl
@@ -436,7 +701,7 @@ gnome-tweaks
 %end
 
 %post --erroronfail
-echo "$Username ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/90-$Username
+$sudoersLine
 chmod 440 /etc/sudoers.d/90-$Username
 
 mkdir -p /etc/gdm
@@ -451,6 +716,7 @@ systemctl enable gdm
 systemctl enable sshd
 systemctl disable initial-setup.service || true
 systemctl disable gnome-initial-setup.service || true
+$sharedFolderPost
 %end
 "@
 
@@ -470,7 +736,7 @@ function New-OEMDRVVHD {
         [Parameter(Mandatory)][string]$KickstartPath
     )
 
-    Write-Host "`n  ── Creating OEMDRV Disk ──" -ForegroundColor $Script:Colors.Header
+    Write-Host "`n  -- Creating OEMDRV Disk --" -ForegroundColor $Script:Colors.Header
 
     if (Test-Path $VHDPath) {
         Remove-Item $VHDPath -Force
@@ -497,6 +763,7 @@ exit
     Write-Step "Copied ks.cfg to ${driveLetter}:\ " "DONE"
 
     $diskpartDetach = Join-Path $env:TEMP "diskpart-oemdrv-detach.txt"
+
     @"
 select vdisk file="$VHDPath"
 detach vdisk
@@ -555,15 +822,17 @@ function New-FedoraVM {
     param(
         [Parameter(Mandatory)][string]$VBoxManage,
         [Parameter(Mandatory)][string]$VMName,
-        [Parameter(Mandatory)][string]$FedoraVersion,
+        [Parameter(Mandatory)][string]$VersionLabel,
         [Parameter(Mandatory)][PSCustomObject]$Config,
         [Parameter(Mandatory)][string]$ISOPath,
         [Parameter(Mandatory)][string]$OEMDRVPath,
         [Parameter(Mandatory)][string]$BaseDir,
-        [Parameter(Mandatory)][int]$SSHPort
+        [Parameter(Mandatory)][int]$SSHPort,
+        [Parameter(Mandatory)][string]$OSType,
+        [string]$SharedFolderPath
     )
 
-    Write-Host "`n  ── Creating Virtual Machine ──" -ForegroundColor $Script:Colors.Header
+    Write-Host "`n  -- Creating Virtual Machine --" -ForegroundColor $Script:Colors.Header
 
     Remove-ExistingVM -VBoxManage $VBoxManage -VMName $VMName
 
@@ -579,7 +848,7 @@ function New-FedoraVM {
         "createvm",
         "--name", $VMName,
         "--basefolder", $BaseDir,
-        "--ostype", "Fedora_64",
+        "--ostype", $OSType,
         "--register"
     ) | Out-Null
 
@@ -676,6 +945,18 @@ function New-FedoraVM {
         "--medium", $ISOPath
     ) | Out-Null
 
+    # Shared folder configuration
+    if ($SharedFolderPath -and (Test-Path $SharedFolderPath)) {
+        $shareName = "shared"
+        Invoke-VBoxManage -VBoxManage $VBoxManage -Arguments @(
+            "sharedfolder", "add", $VMName,
+            "--name", $shareName,
+            "--hostpath", $SharedFolderPath,
+            "--automount"
+        ) -NoThrow | Out-Null
+        Write-Step "Shared folder configured: $SharedFolderPath -> $shareName" "DONE"
+    }
+
     $resParts = $Config.Resolution -split "x"
     Invoke-VBoxManage -VBoxManage $VBoxManage -Arguments @(
         "setextradata", $VMName,
@@ -688,7 +969,7 @@ function New-FedoraVM {
     ) -NoThrow | Out-Null
 
     $desc = @"
-Fedora $FedoraVersion auto-provisioned
+$Distro $VersionLabel auto-provisioned
 Created: $(Get-Date -Format "yyyy-MM-dd HH:mm")
 Main disk: $($Config.DiskGB) GB
 OEMDRV: attached for install only
@@ -715,7 +996,7 @@ function Start-VMInstall {
         [switch]$HeadlessMode
     )
 
-    Write-Host "`n  ── Starting Installation ──" -ForegroundColor $Script:Colors.Header
+    Write-Host "`n  -- Starting Installation --" -ForegroundColor $Script:Colors.Header
 
     $type = if ($HeadlessMode) { "headless" } else { "gui" }
     Invoke-VBoxManage -VBoxManage $VBoxManage -Arguments @(
@@ -732,7 +1013,7 @@ function Wait-ForInstallShutdown {
         [Parameter(Mandatory)][int]$TimeoutMinutes
     )
 
-    Write-Host "`n  ── Waiting For Install To Finish ──" -ForegroundColor $Script:Colors.Header
+    Write-Host "`n  -- Waiting For Install To Finish --" -ForegroundColor $Script:Colors.Header
 
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
     $lastState = ""
@@ -761,7 +1042,7 @@ function Finalize-VMAfterInstall {
         [Parameter(Mandatory)][string]$VMName
     )
 
-    Write-Host "`n  ── Finalizing VM ──" -ForegroundColor $Script:Colors.Header
+    Write-Host "`n  -- Finalizing VM --" -ForegroundColor $Script:Colors.Header
 
     Write-Step "Detaching installer ISO..." "RUNNING"
     Invoke-VBoxManage -VBoxManage $VBoxManage -Arguments @(
@@ -794,6 +1075,28 @@ function Finalize-VMAfterInstall {
     Write-Step "VM cleaned up for normal boots" "DONE"
 }
 
+function Remove-InstallArtifacts {
+    param(
+        [Parameter(Mandatory)][string]$WorkDir
+    )
+
+    Write-Host "`n  -- Cleaning Up Install Artifacts --" -ForegroundColor $Script:Colors.Header
+
+    $ksPath = Join-Path $WorkDir "ks.cfg"
+    $oemdrvPath = Join-Path $WorkDir "OEMDRV.vhd"
+
+    if (Test-Path $ksPath) {
+        Remove-Item $ksPath -Force -ErrorAction SilentlyContinue
+        Write-Step "Removed: ks.cfg" "DONE"
+    }
+    if (Test-Path $oemdrvPath) {
+        Remove-Item $oemdrvPath -Force -ErrorAction SilentlyContinue
+        Write-Step "Removed: OEMDRV.vhd" "DONE"
+    }
+
+    Write-Step "Sensitive install artifacts cleaned up" "DONE"
+}
+
 function New-HelperScripts {
     param(
         [Parameter(Mandatory)][string]$VBoxManage,
@@ -803,90 +1106,385 @@ function New-HelperScripts {
         [Parameter(Mandatory)][int]$SSHPort
     )
 
-    Write-Host "`n  ── Creating Helper Scripts ──" -ForegroundColor $Script:Colors.Header
+    Write-Host "`n  -- Creating Helper Scripts --" -ForegroundColor $Script:Colors.Header
 
     $startScript = @"
-@echo off
-"$VBoxManage" startvm "$VMName" --type gui
+# Start-VM.ps1 - Start the VirtualBox VM
+`$VBoxManage = "$VBoxManage"
+if (-not (Test-Path `$VBoxManage)) {
+    Write-Error "VBoxManage not found at `$VBoxManage"
+    exit 1
+}
+& `$VBoxManage startvm "$VMName" --type gui
+if (`$LASTEXITCODE -ne 0) { Write-Error "Failed to start VM"; exit 1 }
+Write-Host "VM '$VMName' started successfully." -ForegroundColor Green
 "@
-    $startScript | Out-File -FilePath (Join-Path $VMDir "Start-VM.bat") -Encoding ascii
-    Write-Step "Created: Start-VM.bat" "DONE"
+    $startScript | Out-File -FilePath (Join-Path $VMDir "Start-VM.ps1") -Encoding utf8
+    Write-Step "Created: Start-VM.ps1" "DONE"
 
     $stopScript = @"
-@echo off
-"$VBoxManage" controlvm "$VMName" acpipowerbutton
+# Stop-VM.ps1 - Gracefully stop the VirtualBox VM
+`$VBoxManage = "$VBoxManage"
+if (-not (Test-Path `$VBoxManage)) {
+    Write-Error "VBoxManage not found at `$VBoxManage"
+    exit 1
+}
+& `$VBoxManage controlvm "$VMName" acpipowerbutton
+if (`$LASTEXITCODE -ne 0) { Write-Error "Failed to stop VM"; exit 1 }
+Write-Host "Shutdown signal sent to '$VMName'." -ForegroundColor Green
 "@
-    $stopScript | Out-File -FilePath (Join-Path $VMDir "Stop-VM.bat") -Encoding ascii
-    Write-Step "Created: Stop-VM.bat" "DONE"
+    $stopScript | Out-File -FilePath (Join-Path $VMDir "Stop-VM.ps1") -Encoding utf8
+    Write-Step "Created: Stop-VM.ps1" "DONE"
 
     $sshScript = @"
-@echo off
-ssh -p $SSHPort $SSHUser@localhost
-"@
-    $sshScript | Out-File -FilePath (Join-Path $VMDir "SSH-Connect.bat") -Encoding ascii
-    Write-Step "Created: SSH-Connect.bat" "DONE"
+# SSH-Connect.ps1 - Connect to the VM via SSH
+`$SSHPort = $SSHPort
+`$SSHUser = "$SSHUser"
+`$sshCmd = Get-Command ssh -ErrorAction SilentlyContinue
+if (-not `$sshCmd) {
+    Write-Error "SSH client not found. Install OpenSSH or use PuTTY."
+    exit 1
 }
+& ssh -p `$SSHPort `$SSHUser@localhost
+if (`$LASTEXITCODE -ne 0) { Write-Error "SSH connection failed"; exit 1 }
+"@
+    $sshScript | Out-File -FilePath (Join-Path $VMDir "SSH-Connect.ps1") -Encoding utf8
+    Write-Step "Created: SSH-Connect.ps1" "DONE"
+}
+
+# --- Validate / dry-run mode ---
+
+function Invoke-ValidateMode {
+    Write-Host "`n  -- Pre-Flight Validation --" -ForegroundColor $Script:Colors.Header
+    $allGood = $true
+
+    # VirtualBox installed?
+    $vboxOk = $false
+    try {
+        $null = Find-VBoxManage
+        $vboxOk = $true
+    }
+    catch {
+        Write-Step "VirtualBox: NOT FOUND" "ERROR"
+        $allGood = $false
+    }
+
+    # VT-x
+    try {
+        $vtx = (Get-CimInstance -ClassName Win32_Processor).VirtualizationFirmwareEnabled
+        if ($vtx -contains $true) {
+            Write-Step "VT-x/AMD-V: Enabled" "DONE"
+        } else {
+            Write-Step "VT-x/AMD-V: Not detected (check BIOS)" "WARN"
+            $allGood = $false
+        }
+    }
+    catch {
+        Write-Step "VT-x/AMD-V: Could not detect" "WARN"
+    }
+
+    # Disk space
+    $bestDrive = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" |
+        Sort-Object FreeSpace -Descending | Select-Object -First 1
+    if ($bestDrive) {
+        $freeGB = [math]::Round($bestDrive.FreeSpace / 1GB, 1)
+        if ($freeGB -ge 30) {
+            Write-Step "Disk space: $freeGB GB free on $($bestDrive.DeviceID)" "DONE"
+        } else {
+            Write-Step "Disk space: Only $freeGB GB free (need at least 30 GB)" "ERROR"
+            $allGood = $false
+        }
+    }
+
+    # ISO availability (check if URL is reachable)
+    if (-not $ISOPath) {
+        $distroConfig = Get-DistroConfig -Distro $Distro -Version $FedoraVersion
+        try {
+            $null = Invoke-WebRequest -Uri $distroConfig.ISOIndexUrl -UseBasicParsing -Method Head -TimeoutSec 10
+            Write-Step "ISO download URL: Reachable" "DONE"
+        }
+        catch {
+            Write-Step "ISO download URL: Not reachable ($($distroConfig.ISOIndexUrl))" "ERROR"
+            $allGood = $false
+        }
+    } else {
+        if (Test-Path $ISOPath) {
+            Write-Step "ISO file: Found at $ISOPath" "DONE"
+        } else {
+            Write-Step "ISO file: Not found at $ISOPath" "ERROR"
+            $allGood = $false
+        }
+    }
+
+    # SSH port conflict
+    $portInUse = $false
+    try {
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $SSHHostPort)
+        $listener.Start()
+        $listener.Stop()
+        Write-Step "SSH port $SSHHostPort: Available" "DONE"
+    }
+    catch {
+        Write-Step "SSH port $SSHHostPort: Already in use" "WARN"
+        $portInUse = $true
+    }
+
+    # Password hashing
+    $hashTest = New-SHA512CryptHash -Password "test"
+    if ($hashTest) {
+        Write-Step "Password hashing: Available (SHA-512)" "DONE"
+    } else {
+        Write-Step "Password hashing: Not available (will use plaintext)" "WARN"
+    }
+
+    # Hyper-V check
+    try {
+        $hv = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -ErrorAction Stop
+        if ($hv.State -eq "Enabled") {
+            Write-Step "Hyper-V: Enabled (may interfere with VirtualBox)" "WARN"
+        } else {
+            Write-Step "Hyper-V: Disabled" "DONE"
+        }
+    }
+    catch {
+        Write-Step "Hyper-V: Could not determine status" "WARN"
+    }
+
+    Write-Host ""
+    if ($allGood) {
+        Write-Host "  RESULT: All pre-flight checks passed. Ready to provision." -ForegroundColor $Script:Colors.Success
+    } else {
+        Write-Host "  RESULT: Some checks failed. Fix the issues above before provisioning." -ForegroundColor $Script:Colors.Error
+    }
+    Write-Host ""
+}
+
+# --- Main ---
 
 function Main {
     Clear-Host
     Write-Banner
 
+    # Validate mode: run checks and exit
+    if ($Validate) {
+        Invoke-ValidateMode
+        return
+    }
+
     $startTime = Get-Date
+
+    # Apply distro defaults
+    $distroConfig = Get-DistroConfig -Distro $Distro -Version $FedoraVersion
+
+    # Override hostname if user didn't set it and using non-Fedora distro
+    if ($GuestHostname -eq "fedora-vm" -and $Distro -ne "Fedora") {
+        $GuestHostname = $distroConfig.DefaultHostname
+    }
+
+    # Override VMName default if using non-Fedora distro
+    if ($VMName -eq "Fedora-Workstation" -and $Distro -ne "Fedora") {
+        $VMName = "$Distro-Workstation"
+    }
+
+    $vmDir = Join-Path $VMBaseDir $VMName
+    $workDir = Join-Path $vmDir "_autoinstall"
+    $statePath = Join-Path $workDir "provision-state.json"
+    $ksPath = Join-Path $workDir "ks.cfg"
+    $oemdrvPath = Join-Path $workDir "OEMDRV.vhd"
+
+    # Load resume state
+    $state = $null
+    if ($Force -and -not $NoResume) {
+        $state = Get-ProvisionState -StatePath $statePath
+        if ($state) {
+            Write-Step "Resuming from previous provisioning state" "INFO"
+        }
+    }
+    if ($NoResume -and (Test-Path $statePath)) {
+        Remove-Item $statePath -Force -ErrorAction SilentlyContinue
+        $state = $null
+    }
 
     Test-HostVirtualizationWarnings
 
     $specs = Get-SystemSpecs
     $vmConfig = Get-OptimalVMConfig -Specs $specs
     $vboxManage = Find-VBoxManage
-    $fedoraISO = Get-FedoraNetinstISO -Version $FedoraVersion -ProvidedISOPath $ISOPath
 
-    $vmDir = Join-Path $VMBaseDir $VMName
-    $workDir = Join-Path $vmDir "_autoinstall"
-    $ksPath = Join-Path $workDir "ks.cfg"
-    $oemdrvPath = Join-Path $workDir "OEMDRV.vhd"
-
-    $null = New-KickstartFile `
-        -Path $ksPath `
-        -Username $GuestUsername `
-        -Password $GuestPassword `
-        -Hostname $GuestHostname `
-        -Timezone $GuestTimezone
-
-    $null = New-OEMDRVVHD `
-        -VHDPath $oemdrvPath `
-        -KickstartPath $ksPath
-
-    $vmInfo = New-FedoraVM `
-        -VBoxManage $vboxManage `
-        -VMName $VMName `
-        -FedoraVersion $FedoraVersion `
-        -Config $vmConfig `
-        -ISOPath $fedoraISO `
-        -OEMDRVPath $oemdrvPath `
-        -BaseDir $VMBaseDir `
-        -SSHPort $SSHHostPort
-
-    New-HelperScripts `
-        -VBoxManage $vboxManage `
-        -VMName $VMName `
-        -VMDir $vmInfo.VMDir `
-        -SSHUser $GuestUsername `
-        -SSHPort $SSHHostPort
-
-    Start-VMInstall -VBoxManage $vboxManage -VMName $VMName -HeadlessMode:$Headless
-
-    $finished = Wait-ForInstallShutdown `
-        -VBoxManage $vboxManage `
-        -VMName $VMName `
-        -TimeoutMinutes $InstallTimeoutMinutes
-
-    if (-not $finished) {
-        throw "Install did not finish within $InstallTimeoutMinutes minutes. Check the VM console. Kickstart: $ksPath"
+    # ISO step
+    $fedoraISO = $null
+    if (-not (Test-StepCompleted -State $state -StepName "iso_ready")) {
+        $fedoraISO = Get-FedoraNetinstISO -Version $FedoraVersion -ProvidedISOPath $ISOPath -DistroName $Distro
+        $currentState = @{
+            iso_ready = $true
+            iso_path  = $fedoraISO
+        }
+        Save-ProvisionState -StatePath $statePath -State $currentState
+        $state = Get-ProvisionState -StatePath $statePath
+    } else {
+        $fedoraISO = $state.iso_path
+        if (-not (Test-Path $fedoraISO)) {
+            Write-Step "Previously used ISO not found at $fedoraISO. Re-downloading." "WARN"
+            $fedoraISO = Get-FedoraNetinstISO -Version $FedoraVersion -ProvidedISOPath $ISOPath -DistroName $Distro
+        }
+        Write-Step "ISO already ready: $fedoraISO" "DONE"
     }
 
-    Finalize-VMAfterInstall -VBoxManage $vboxManage -VMName $VMName
+    # Kickstart step
+    if (-not (Test-StepCompleted -State $state -StepName "kickstart_created")) {
+        $sharedName = if ($SharedFolder) { "shared" } else { "" }
+        $null = New-KickstartFile `
+            -Path $ksPath `
+            -Username $GuestUsername `
+            -Password $GuestPassword `
+            -Hostname $GuestHostname `
+            -Timezone $GuestTimezone `
+            -PackageGroup $distroConfig.PackageGroup `
+            -SecureSudoMode:$SecureSudo `
+            -SharedFolderName $sharedName
 
-    Write-Step "Booting finished Fedora VM..." "RUNNING"
+        $currentState = @{
+            iso_ready         = $true
+            iso_path          = $fedoraISO
+            kickstart_created = $true
+        }
+        Save-ProvisionState -StatePath $statePath -State $currentState
+        $state = Get-ProvisionState -StatePath $statePath
+    } else {
+        Write-Step "Kickstart already created" "DONE"
+    }
+
+    # OEMDRV step
+    if (-not (Test-StepCompleted -State $state -StepName "oemdrv_created")) {
+        $null = New-OEMDRVVHD `
+            -VHDPath $oemdrvPath `
+            -KickstartPath $ksPath
+
+        $currentState = @{
+            iso_ready         = $true
+            iso_path          = $fedoraISO
+            kickstart_created = $true
+            oemdrv_created    = $true
+        }
+        Save-ProvisionState -StatePath $statePath -State $currentState
+        $state = Get-ProvisionState -StatePath $statePath
+    } else {
+        Write-Step "OEMDRV disk already created" "DONE"
+    }
+
+    # VM creation step
+    $vmInfo = $null
+    if (-not (Test-StepCompleted -State $state -StepName "vm_created")) {
+        $vmInfo = New-FedoraVM `
+            -VBoxManage $vboxManage `
+            -VMName $VMName `
+            -VersionLabel $FedoraVersion `
+            -Config $vmConfig `
+            -ISOPath $fedoraISO `
+            -OEMDRVPath $oemdrvPath `
+            -BaseDir $VMBaseDir `
+            -SSHPort $SSHHostPort `
+            -OSType $distroConfig.OSType `
+            -SharedFolderPath $SharedFolder
+
+        New-HelperScripts `
+            -VBoxManage $vboxManage `
+            -VMName $VMName `
+            -VMDir $vmInfo.VMDir `
+            -SSHUser $GuestUsername `
+            -SSHPort $SSHHostPort
+
+        $currentState = @{
+            iso_ready         = $true
+            iso_path          = $fedoraISO
+            kickstart_created = $true
+            oemdrv_created    = $true
+            vm_created        = $true
+        }
+        Save-ProvisionState -StatePath $statePath -State $currentState
+        $state = Get-ProvisionState -StatePath $statePath
+    } else {
+        $vmInfo = [PSCustomObject]@{
+            VMDir   = $vmDir
+            VDIPath = Join-Path $vmDir "$VMName.vdi"
+        }
+        Write-Step "VM already created" "DONE"
+    }
+
+    # Install step
+    if (-not (Test-StepCompleted -State $state -StepName "install_completed")) {
+        if (-not (Test-StepCompleted -State $state -StepName "install_started")) {
+            Start-VMInstall -VBoxManage $vboxManage -VMName $VMName -HeadlessMode:$Headless
+
+            $currentState = @{
+                iso_ready         = $true
+                iso_path          = $fedoraISO
+                kickstart_created = $true
+                oemdrv_created    = $true
+                vm_created        = $true
+                install_started   = $true
+            }
+            Save-ProvisionState -StatePath $statePath -State $currentState
+            $state = Get-ProvisionState -StatePath $statePath
+        } else {
+            Write-Step "Install was already started, checking VM state..." "INFO"
+            $currentVMState = Get-VMState -VBoxManage $vboxManage -VMName $VMName
+            if ($currentVMState -ne "poweroff") {
+                Write-Step "VM is still running ($currentVMState). Waiting for completion..." "INFO"
+            }
+        }
+
+        $finished = Wait-ForInstallShutdown `
+            -VBoxManage $vboxManage `
+            -VMName $VMName `
+            -TimeoutMinutes $InstallTimeoutMinutes
+
+        if (-not $finished) {
+            throw "Install did not finish within $InstallTimeoutMinutes minutes. Check the VM console. Kickstart: $ksPath"
+        }
+
+        $currentState = @{
+            iso_ready          = $true
+            iso_path           = $fedoraISO
+            kickstart_created  = $true
+            oemdrv_created     = $true
+            vm_created         = $true
+            install_started    = $true
+            install_completed  = $true
+        }
+        Save-ProvisionState -StatePath $statePath -State $currentState
+        $state = Get-ProvisionState -StatePath $statePath
+    } else {
+        Write-Step "Install already completed" "DONE"
+    }
+
+    # Finalize step
+    if (-not (Test-StepCompleted -State $state -StepName "finalized")) {
+        Finalize-VMAfterInstall -VBoxManage $vboxManage -VMName $VMName
+
+        # Clean up sensitive artifacts unless -KeepArtifacts is specified
+        if (-not $KeepArtifacts) {
+            Remove-InstallArtifacts -WorkDir $workDir
+        } else {
+            Write-Step "Keeping install artifacts as requested (-KeepArtifacts)" "INFO"
+        }
+
+        $currentState = @{
+            iso_ready          = $true
+            iso_path           = $fedoraISO
+            kickstart_created  = $true
+            oemdrv_created     = $true
+            vm_created         = $true
+            install_started    = $true
+            install_completed  = $true
+            finalized          = $true
+        }
+        Save-ProvisionState -StatePath $statePath -State $currentState
+    } else {
+        Write-Step "VM already finalized" "DONE"
+    }
+
+    Write-Step "Booting finished $Distro VM..." "RUNNING"
     Invoke-VBoxManage -VBoxManage $vboxManage -Arguments @(
         "startvm", $VMName, "--type", $(if ($Headless) { "headless" } else { "gui" })
     ) | Out-Null
@@ -895,18 +1493,21 @@ function Main {
     $elapsed = ((Get-Date) - $startTime).TotalMinutes
 
     Write-Host ""
-    Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor $Script:Colors.Success
-    Write-Host "  ║                FULL AUTO SETUP COMPLETE                 ║" -ForegroundColor $Script:Colors.Success
-    Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor $Script:Colors.Success
+    Write-Host "  ======================================================" -ForegroundColor $Script:Colors.Success
+    Write-Host "                FULL AUTO SETUP COMPLETE                 " -ForegroundColor $Script:Colors.Success
+    Write-Host "  ======================================================" -ForegroundColor $Script:Colors.Success
     Write-Host ""
 
     Write-Host "  VM Name:      $VMName" -ForegroundColor White
-    Write-Host "  Fedora:       $FedoraVersion" -ForegroundColor White
+    Write-Host "  Distro:       $Distro $FedoraVersion" -ForegroundColor White
     Write-Host "  Username:     $GuestUsername" -ForegroundColor White
     Write-Host "  Password:     $GuestPassword" -ForegroundColor White
     Write-Host "  Hostname:     $GuestHostname" -ForegroundColor White
     Write-Host "  SSH:          ssh -p $SSHHostPort $GuestUsername@localhost" -ForegroundColor White
     Write-Host "  VM Folder:    $($vmInfo.VMDir)" -ForegroundColor White
+    if ($SharedFolder) {
+        Write-Host "  Shared:       $SharedFolder -> /mnt/shared" -ForegroundColor White
+    }
     Write-Host "  Elapsed:      $([math]::Round($elapsed, 1)) minutes" -ForegroundColor White
     Write-Host ""
 
