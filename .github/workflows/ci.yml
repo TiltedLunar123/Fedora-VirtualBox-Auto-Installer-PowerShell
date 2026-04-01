@@ -21,7 +21,7 @@ jobs:
       - name: Run PSScriptAnalyzer
         shell: pwsh
         run: |
-          $results = Invoke-ScriptAnalyzer -Path ./New-FedoraVirtualBoxVM.ps1 -Severity Warning,Error -ReportSummary
+          $results = Invoke-ScriptAnalyzer -Path ./New-FedoraVirtualBoxVM.ps1 -Settings ./PSScriptAnalyzerSettings.psd1 -Severity Warning,Error -ReportSummary
           $results | Format-Table -AutoSize
           if ($results.Count -gt 0) {
             Write-Error "PSScriptAnalyzer found $($results.Count) issue(s)."

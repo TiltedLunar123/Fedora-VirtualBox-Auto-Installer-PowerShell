@@ -178,8 +178,8 @@ Describe "New-KickstartFile" {
             $ksPath = Join-Path $testDir "ks-default.cfg"
             $null = New-KickstartFile `
                 -Path $ksPath `
-                -Username "testuser" `
-                -Password "testpass" `
+                -GuestUser "testuser" `
+                -GuestPass "testpass" `
                 -Hostname "test-vm" `
                 -Timezone "UTC" `
                 -PackageGroup "@^workstation-product-environment"
@@ -226,8 +226,8 @@ Describe "New-KickstartFile" {
             $ksPath = Join-Path $testDir "ks-secure.cfg"
             $null = New-KickstartFile `
                 -Path $ksPath `
-                -Username "admin" `
-                -Password "secure123" `
+                -GuestUser "admin" `
+                -GuestPass "secure123" `
                 -Hostname "server-vm" `
                 -Timezone "Europe/London" `
                 -PackageGroup "@^server-product-environment" `
@@ -253,8 +253,8 @@ Describe "New-KickstartFile" {
             $ksPath = Join-Path $testDir "ks-shared.cfg"
             $null = New-KickstartFile `
                 -Path $ksPath `
-                -Username "user" `
-                -Password "pass" `
+                -GuestUser "user" `
+                -GuestPass "pass" `
                 -Hostname "vm" `
                 -Timezone "UTC" `
                 -PackageGroup "@^workstation-product-environment" `
@@ -369,7 +369,7 @@ Describe "Emoji Fallback" {
 
 Describe "New-SHA512CryptHash" {
     It "Should return a string or null" {
-        $result = New-SHA512CryptHash -Password "test"
+        $result = New-SHA512CryptHash -Passphrase "test"
         if ($result) {
             $result | Should -Match '^\$6\$'
             $result.Length | Should -BeGreaterThan 20

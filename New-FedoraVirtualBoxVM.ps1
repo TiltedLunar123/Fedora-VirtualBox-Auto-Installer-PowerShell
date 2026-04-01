@@ -184,18 +184,18 @@ function Get-DistroConfig {
 # --- SHA-512 password hashing ---
 
 function New-SHA512CryptHash {
-    param([string]$Password)
+    param([string]$Passphrase)
 
     $openssl = Get-Command openssl -ErrorAction SilentlyContinue
     if ($openssl) {
-        $hash = & openssl passwd -6 $Password 2>$null
+        $hash = & openssl passwd -6 $Passphrase 2>$null
         if ($LASTEXITCODE -eq 0 -and $hash) { return $hash }
     }
 
     $python = Get-Command python3 -ErrorAction SilentlyContinue
     if (-not $python) { $python = Get-Command python -ErrorAction SilentlyContinue }
     if ($python) {
-        $hash = & $python.Source -c "import crypt; print(crypt.crypt('$Password', crypt.mksalt(crypt.METHOD_SHA512)))" 2>$null
+        $hash = & $python.Source -c "import crypt; print(crypt.crypt('$Passphrase', crypt.mksalt(crypt.METHOD_SHA512)))" 2>$null
         if ($LASTEXITCODE -eq 0 -and $hash) { return $hash }
     }
 
@@ -338,7 +338,7 @@ function Get-SystemSpecs {
         $vtx = (Get-CimInstance -ClassName Win32_Processor).VirtualizationFirmwareEnabled
         $vtxEnabled = ($vtx -contains $true)
     }
-    catch { }
+    catch { Write-Verbose "VT-x detection unavailable: $_" }
 
     $specs = [PSCustomObject]@{
         CPUName       = $cpuName
@@ -604,8 +604,8 @@ function Get-FedoraNetinstISO {
 function New-KickstartFile {
     param(
         [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string]$Username,
-        [Parameter(Mandatory)][string]$Password,
+        [Parameter(Mandatory)][string]$GuestUser,
+        [Parameter(Mandatory)][string]$GuestPass,
         [Parameter(Mandatory)][string]$Hostname,
         [Parameter(Mandatory)][string]$Timezone,
         [Parameter(Mandatory)][string]$PackageGroup,
@@ -616,20 +616,20 @@ function New-KickstartFile {
     Write-Host "`n  -- Creating Kickstart --" -ForegroundColor $Script:Colors.Header
 
     # Attempt to hash the password with SHA-512
-    $passwordHash = New-SHA512CryptHash -Password $Password
+    $passwordHash = New-SHA512CryptHash -Passphrase $GuestPass
     if ($passwordHash) {
-        $userLine = "user --name=$Username --password=$passwordHash --iscrypted --groups=wheel"
+        $userLine = "user --name=$GuestUser --password=$passwordHash --iscrypted --groups=wheel"
         Write-Step "Password will be stored as SHA-512 hash in Kickstart" "DONE"
     } else {
-        $userLine = "user --name=$Username --password=$Password --plaintext --groups=wheel"
+        $userLine = "user --name=$GuestUser --password=$GuestPass --plaintext --groups=wheel"
         Write-Step "Could not hash password (openssl/python not found). Using plaintext in Kickstart." "WARN"
     }
 
     # Sudoers line
     $sudoersLine = if ($SecureSudoMode) {
-        "echo `"$Username ALL=(ALL) ALL`" > /etc/sudoers.d/90-$Username"
+        "echo `"$GuestUser ALL=(ALL) ALL`" > /etc/sudoers.d/90-$GuestUser"
     } else {
-        "echo `"$Username ALL=(ALL) NOPASSWD: ALL`" > /etc/sudoers.d/90-$Username"
+        "echo `"$GuestUser ALL=(ALL) NOPASSWD: ALL`" > /etc/sudoers.d/90-$GuestUser"
     }
 
     # Shared folder post-install block
@@ -702,13 +702,13 @@ gnome-tweaks
 
 %post --erroronfail
 $sudoersLine
-chmod 440 /etc/sudoers.d/90-$Username
+chmod 440 /etc/sudoers.d/90-$GuestUser
 
 mkdir -p /etc/gdm
 cat > /etc/gdm/custom.conf <<'EOF'
 [daemon]
 AutomaticLoginEnable=True
-AutomaticLogin=$Username
+AutomaticLogin=$GuestUser
 WaylandEnable=false
 EOF
 
@@ -1222,15 +1222,15 @@ function Invoke-ValidateMode {
         $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $SSHHostPort)
         $listener.Start()
         $listener.Stop()
-        Write-Step "SSH port $SSHHostPort: Available" "DONE"
+        Write-Step "SSH port ${SSHHostPort}: Available" "DONE"
     }
     catch {
-        Write-Step "SSH port $SSHHostPort: Already in use" "WARN"
+        Write-Step "SSH port ${SSHHostPort}: Already in use" "WARN"
         $portInUse = $true
     }
 
     # Password hashing
-    $hashTest = New-SHA512CryptHash -Password "test"
+    $hashTest = New-SHA512CryptHash -Passphrase "test"
     if ($hashTest) {
         Write-Step "Password hashing: Available (SHA-512)" "DONE"
     } else {
@@ -1335,8 +1335,8 @@ function Main {
         $sharedName = if ($SharedFolder) { "shared" } else { "" }
         $null = New-KickstartFile `
             -Path $ksPath `
-            -Username $GuestUsername `
-            -Password $GuestPassword `
+            -GuestUser $GuestUsername `
+            -GuestPass $GuestPassword `
             -Hostname $GuestHostname `
             -Timezone $GuestTimezone `
             -PackageGroup $distroConfig.PackageGroup `

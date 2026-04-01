@@ -1,6 +1,6 @@
 # VirtualBox Auto-Installer (PowerShell)
 
-[![CI](https://github.com/YOUR_USERNAME/Fedora-VirtualBox-Auto-Installer-PowerShell/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_USERNAME/Fedora-VirtualBox-Auto-Installer-PowerShell/actions/workflows/ci.yml)
+[![CI](https://github.com/TiltedLunar123/Fedora-VirtualBox-Auto-Installer-PowerShell/actions/workflows/ci.yml/badge.svg)](https://github.com/TiltedLunar123/Fedora-VirtualBox-Auto-Installer-PowerShell/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue.svg?logo=powershell)](https://docs.microsoft.com/en-us/powershell/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6.svg?logo=windows)](https://www.microsoft.com/windows)
@@ -163,10 +163,6 @@ ssh -p 2222 user@localhost
 ## Resume / Checkpoint
 
 If provisioning is interrupted, re-running with `-Force` will resume from the last completed step. The script tracks progress in `_autoinstall/provision-state.json`. Use `-NoResume` to force starting from scratch.
-
-## Screenshots
-
-<!-- Screenshots coming soon -->
 
 ## License
 
