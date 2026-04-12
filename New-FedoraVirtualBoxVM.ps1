@@ -55,11 +55,15 @@ param(
     [string]$FedoraVersion = "43",
     [string]$VMBaseDir = "$env:USERPROFILE\VirtualBox VMs",
     [string]$ISOPath,
+    [ValidateNotNullOrEmpty()]
     [string]$GuestUsername = "user",
+    [ValidateNotNullOrEmpty()]
     [string]$GuestPassword = "fedora",
-    [string]$GuestHostname = "fedora-vm",
+    [string]$GuestHostname,
     [string]$GuestTimezone = "America/New_York",
+    [ValidateRange(1024,65535)]
     [int]$SSHHostPort = 2222,
+    [ValidateRange(1,1440)]
     [int]$InstallTimeoutMinutes = 90,
     [switch]$SkipDownload,
     [switch]$Force,
@@ -199,7 +203,7 @@ function New-SHA512CryptHash {
         if ($LASTEXITCODE -eq 0 -and $hash) { return $hash }
     }
 
-    return $null
+    throw "Cannot hash password: neither openssl nor python found. Install one of them and retry."
 }
 
 # --- Provision state management ---
@@ -615,15 +619,10 @@ function New-KickstartFile {
 
     Write-Host "`n  -- Creating Kickstart --" -ForegroundColor $Script:Colors.Header
 
-    # Attempt to hash the password with SHA-512
+    # Hash the password with SHA-512 (throws if no hashing tool is available)
     $passwordHash = New-SHA512CryptHash -Passphrase $GuestPass
-    if ($passwordHash) {
-        $userLine = "user --name=$GuestUser --password=$passwordHash --iscrypted --groups=wheel"
-        Write-Step "Password will be stored as SHA-512 hash in Kickstart" "DONE"
-    } else {
-        $userLine = "user --name=$GuestUser --password=$GuestPass --plaintext --groups=wheel"
-        Write-Step "Could not hash password (openssl/python not found). Using plaintext in Kickstart." "WARN"
-    }
+    $userLine = "user --name=$GuestUser --password=$passwordHash --iscrypted --groups=wheel"
+    Write-Step "Password will be stored as SHA-512 hash in Kickstart" "DONE"
 
     # Sudoers line
     $sudoersLine = if ($SecureSudoMode) {
@@ -1230,11 +1229,13 @@ function Invoke-ValidateMode {
     }
 
     # Password hashing
-    $hashTest = New-SHA512CryptHash -Passphrase "test"
-    if ($hashTest) {
+    try {
+        $null = New-SHA512CryptHash -Passphrase "test"
         Write-Step "Password hashing: Available (SHA-512)" "DONE"
-    } else {
-        Write-Step "Password hashing: Not available (will use plaintext)" "WARN"
+    }
+    catch {
+        Write-Step "Password hashing: Not available (openssl/python required)" "ERROR"
+        $allGood = $false
     }
 
     # Hyper-V check
@@ -1276,8 +1277,8 @@ function Main {
     # Apply distro defaults
     $distroConfig = Get-DistroConfig -Distro $Distro -Version $FedoraVersion
 
-    # Override hostname if user didn't set it and using non-Fedora distro
-    if ($GuestHostname -eq "fedora-vm" -and $Distro -ne "Fedora") {
+    # Use distro-specific hostname when user didn't provide one
+    if (-not $GuestHostname) {
         $GuestHostname = $distroConfig.DefaultHostname
     }
 

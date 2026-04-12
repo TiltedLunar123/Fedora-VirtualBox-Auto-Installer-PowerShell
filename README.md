@@ -7,6 +7,16 @@
 
 Fully automatic RHEL-family VM provisioning for VirtualBox on Windows. Creates a VM from scratch, feeds the installer a real Kickstart file through an attached `OEMDRV` disk, waits for the install to finish, removes the installer media, and boots the completed VM.
 
+## One-Line Install
+
+Paste into an **Administrator** PowerShell window:
+
+```powershell
+irm https://raw.githubusercontent.com/TiltedLunar123/Fedora-VirtualBox-Auto-Installer-PowerShell/main/install.ps1 | iex
+```
+
+This downloads the script to `%USERPROFILE%\Fedora-VirtualBox-Auto-Installer\` and prints usage instructions.
+
 ## Supported Distributions
 
 | Distribution | Default Package Group | Default Hostname |
@@ -112,7 +122,7 @@ The shared folder will be available inside the VM at `/mnt/shared`.
 | `-ISOPath` | String | -- | Path to a local ISO |
 | `-GuestUsername` | String | `user` | Guest OS username |
 | `-GuestPassword` | String | `fedora` | Guest OS password |
-| `-GuestHostname` | String | `fedora-vm` | Guest OS hostname |
+| `-GuestHostname` | String | *(from distro)* | Guest OS hostname |
 | `-GuestTimezone` | String | `America/New_York` | Timezone |
 | `-SSHHostPort` | Int | `2222` | Host port for SSH forwarding |
 | `-InstallTimeoutMinutes` | Int | `90` | Max wait for install |
@@ -130,7 +140,7 @@ The shared folder will be available inside the VM at `/mnt/shared`.
 
 ### Password Hashing
 
-Guest passwords are hashed with SHA-512 before being written to the Kickstart file. The script tries `openssl` first, then falls back to `python`. If neither is available, it warns and uses plaintext as a last resort.
+Guest passwords are hashed with SHA-512 before being written to the Kickstart file. The script tries `openssl` first, then falls back to `python`. If neither is available, the script exits with an error rather than using plaintext.
 
 ### Artifact Cleanup
 
@@ -163,6 +173,18 @@ ssh -p 2222 user@localhost
 ## Resume / Checkpoint
 
 If provisioning is interrupted, re-running with `-Force` will resume from the last completed step. The script tracks progress in `_autoinstall/provision-state.json`. Use `-NoResume` to force starting from scratch.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and PR guidelines.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for the script's security model, permissions, and how to report vulnerabilities.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ## License
 

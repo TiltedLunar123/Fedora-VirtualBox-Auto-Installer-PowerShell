@@ -3,7 +3,7 @@
 BeforeAll {
     # Dot-source the script functions by extracting them.
     # We parse the script AST to get function definitions without running Main.
-    $scriptPath = Join-Path $PSScriptRoot ".." "New-FedoraVirtualBoxVM.ps1"
+    $scriptPath = Join-Path (Join-Path $PSScriptRoot "..") "New-FedoraVirtualBoxVM.ps1"
     $scriptContent = Get-Content $scriptPath -Raw
 
     # Extract and define individual functions for testing
@@ -361,20 +361,140 @@ Describe "Emoji Fallback" {
     }
 
     It "Should have emoji icons defined" {
-        $emojiIcons = @{ Running="⚡"; Done="✅"; Warn="⚠️"; Error="❌"; Info="ℹ️" }
-        $emojiIcons.Running | Should -Not -BeNullOrEmpty
-        $emojiIcons.Done | Should -Not -BeNullOrEmpty
+        # Verify the emoji icon set has all required keys
+        $emojiIcons = @{ Running="R"; Done="D"; Warn="W"; Error="E"; Info="I" }
+        $emojiIcons.Keys.Count | Should -Be 5
+        $emojiIcons.ContainsKey("Running") | Should -BeTrue
+        $emojiIcons.ContainsKey("Done") | Should -BeTrue
+        $emojiIcons.ContainsKey("Info") | Should -BeTrue
     }
 }
 
 Describe "New-SHA512CryptHash" {
-    It "Should return a string or null" {
-        $result = New-SHA512CryptHash -Passphrase "test"
-        if ($result) {
+    It "Should return a valid SHA-512 hash or throw if no tool is available" {
+        try {
+            $result = New-SHA512CryptHash -Passphrase "test"
             $result | Should -Match '^\$6\$'
             $result.Length | Should -BeGreaterThan 20
-        } else {
-            $result | Should -BeNullOrEmpty
         }
+        catch {
+            $_.Exception.Message | Should -Match "Cannot hash password"
+        }
+    }
+
+    It "Should throw with a descriptive message when no hashing tool exists" {
+        # Mock both Get-Command calls to return nothing
+        Mock Get-Command { $null }
+
+        { New-SHA512CryptHash -Passphrase "test" } | Should -Throw "*Cannot hash password*"
+    }
+}
+
+Describe "Find-VBoxManage" {
+    It "Should check standard VirtualBox install paths" {
+        # Mock Write-Host/Write-Step to suppress output
+        Mock Write-Host {}
+        Mock Write-Step {} -ErrorAction SilentlyContinue
+
+        # Mock Test-Path to return false for all candidates
+        Mock Test-Path { $false }
+        Mock Get-Command { $null }
+
+        # Should throw when VBoxManage is not found anywhere
+        # Also mock Start-Process to prevent opening a browser
+        Mock Start-Process {}
+
+        { Find-VBoxManage } | Should -Throw "*VBoxManage*"
+    }
+
+    It "Should return path when VBoxManage is on PATH" {
+        Mock Write-Host {}
+        Mock Write-Step {} -ErrorAction SilentlyContinue
+
+        $fakePath = "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe"
+        Mock Get-Command { [PSCustomObject]@{ Source = $fakePath } }
+        Mock Test-Path { $true } -ParameterFilter { $Path -eq $fakePath }
+
+        $result = Find-VBoxManage
+        $result | Should -Be $fakePath
+    }
+}
+
+Describe "New-HelperScripts" {
+    BeforeAll {
+        $testDir = Join-Path $env:TEMP "pester-helpers-test-$(Get-Random)"
+        New-Item -Path $testDir -ItemType Directory -Force | Out-Null
+
+        # Suppress console output
+        Mock Write-Host {}
+        Mock Write-Step {} -ErrorAction SilentlyContinue
+
+        New-HelperScripts `
+            -VBoxManage "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" `
+            -VMName "TestVM" `
+            -VMDir $testDir `
+            -SSHUser "testuser" `
+            -SSHPort 2222
+    }
+
+    AfterAll {
+        Remove-Item $testDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It "Should create Start-VM.ps1" {
+        Test-Path (Join-Path $testDir "Start-VM.ps1") | Should -BeTrue
+    }
+
+    It "Should create Stop-VM.ps1" {
+        Test-Path (Join-Path $testDir "Stop-VM.ps1") | Should -BeTrue
+    }
+
+    It "Should create SSH-Connect.ps1" {
+        Test-Path (Join-Path $testDir "SSH-Connect.ps1") | Should -BeTrue
+    }
+
+    It "Start-VM.ps1 should reference the correct VM name" {
+        $content = Get-Content (Join-Path $testDir "Start-VM.ps1") -Raw
+        $content | Should -Match "TestVM"
+    }
+
+    It "SSH-Connect.ps1 should reference the correct port and user" {
+        $content = Get-Content (Join-Path $testDir "SSH-Connect.ps1") -Raw
+        $content | Should -Match "2222"
+        $content | Should -Match "testuser"
+    }
+}
+
+Describe "Invoke-ExternalCommand" {
+    It "Should return output from a successful command" {
+        $result = Invoke-ExternalCommand -FilePath "cmd.exe" -Arguments @("/c", "echo hello")
+        $result | Should -Match "hello"
+    }
+
+    It "Should throw on non-zero exit code by default" {
+        { Invoke-ExternalCommand -FilePath "cmd.exe" -Arguments @("/c", "exit 1") } | Should -Throw "*Command failed*"
+    }
+
+    It "Should not throw with -NoThrow on non-zero exit code" {
+        { Invoke-ExternalCommand -FilePath "cmd.exe" -Arguments @("/c", "exit 1") -NoThrow } | Should -Not -Throw
+    }
+}
+
+Describe "GuestHostname default behavior" {
+    It "Each distro should have a DefaultHostname in its config" {
+        foreach ($distro in @("Fedora", "CentOS-Stream", "AlmaLinux", "Rocky")) {
+            $config = Get-DistroConfig -Distro $distro -Version "9"
+            $config.DefaultHostname | Should -Not -BeNullOrEmpty -Because "$distro should have a DefaultHostname"
+        }
+    }
+
+    It "Fedora DefaultHostname should be fedora-vm" {
+        $config = Get-DistroConfig -Distro "Fedora" -Version "43"
+        $config.DefaultHostname | Should -Be "fedora-vm"
+    }
+
+    It "Rocky DefaultHostname should be rocky-vm" {
+        $config = Get-DistroConfig -Distro "Rocky" -Version "9"
+        $config.DefaultHostname | Should -Be "rocky-vm"
     }
 }
