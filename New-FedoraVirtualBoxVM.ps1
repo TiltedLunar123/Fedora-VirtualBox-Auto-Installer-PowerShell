@@ -202,11 +202,16 @@ function New-SHA512CryptHash {
     $python = Get-Command python3 -ErrorAction SilentlyContinue
     if (-not $python) { $python = Get-Command python -ErrorAction SilentlyContinue }
     if ($python) {
-        $hash = & $python.Source -c "import crypt; print(crypt.crypt('$Passphrase', crypt.mksalt(crypt.METHOD_SHA512)))" 2>$null
+        $hash = & $python.Source -c "
+try:
+    import crypt; print(crypt.crypt('$Passphrase', crypt.mksalt(crypt.METHOD_SHA512)))
+except (ImportError, AttributeError):
+    from passlib.hash import sha512_crypt; print(sha512_crypt.using(rounds=5000).hash('$Passphrase'))
+" 2>$null
         if ($LASTEXITCODE -eq 0 -and $hash) { return $hash }
     }
 
-    throw "Cannot hash password: neither openssl nor python found. Install one of them and retry."
+    throw "Cannot hash password: neither openssl nor python (with crypt or passlib) found. Install openssl or run: pip install passlib"
 }
 
 # --- Provision state management ---
