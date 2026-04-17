@@ -51,13 +51,16 @@
 
 [CmdletBinding()]
 param(
+    [ValidatePattern('^[a-zA-Z0-9._-]+$')]
     [string]$VMName = "Fedora-Workstation",
     [string]$FedoraVersion = "43",
     [string]$VMBaseDir = "$env:USERPROFILE\VirtualBox VMs",
     [string]$ISOPath,
     [ValidateNotNullOrEmpty()]
+    [ValidatePattern('^[a-zA-Z0-9._-]+$')]
     [string]$GuestUsername = "user",
     [ValidateNotNullOrEmpty()]
+    [ValidatePattern("^[^'`$]+$")]
     [string]$GuestPassword = "fedora",
     [string]$GuestHostname,
     [string]$GuestTimezone = "America/New_York",
@@ -199,11 +202,16 @@ function New-SHA512CryptHash {
     $python = Get-Command python3 -ErrorAction SilentlyContinue
     if (-not $python) { $python = Get-Command python -ErrorAction SilentlyContinue }
     if ($python) {
-        $hash = & $python.Source -c "import crypt; print(crypt.crypt('$Passphrase', crypt.mksalt(crypt.METHOD_SHA512)))" 2>$null
+        $hash = & $python.Source -c "
+try:
+    import crypt; print(crypt.crypt('$Passphrase', crypt.mksalt(crypt.METHOD_SHA512)))
+except (ImportError, AttributeError):
+    from passlib.hash import sha512_crypt; print(sha512_crypt.using(rounds=5000).hash('$Passphrase'))
+" 2>$null
         if ($LASTEXITCODE -eq 0 -and $hash) { return $hash }
     }
 
-    throw "Cannot hash password: neither openssl nor python found. Install one of them and retry."
+    throw "Cannot hash password: neither openssl nor python (with crypt or passlib) found. Install openssl or run: pip install passlib"
 }
 
 # --- Provision state management ---
@@ -614,6 +622,7 @@ function New-KickstartFile {
         [Parameter(Mandatory)][string]$Timezone,
         [Parameter(Mandatory)][string]$PackageGroup,
         [switch]$SecureSudoMode,
+        [ValidatePattern('^[a-zA-Z0-9._-]*$')]
         [string]$SharedFolderName
     )
 
@@ -630,6 +639,25 @@ function New-KickstartFile {
     } else {
         "echo `"$GuestUser ALL=(ALL) NOPASSWD: ALL`" > /etc/sudoers.d/90-$GuestUser"
     }
+
+    $isWorkstation = $PackageGroup -match 'workstation-product-environment'
+
+    $desktopPackages = if ($isWorkstation) { "`ngnome-tweaks" } else { "" }
+
+    $desktopPostSetup = if ($isWorkstation) {
+        @"
+
+mkdir -p /etc/gdm
+cat > /etc/gdm/custom.conf <<'EOF'
+[daemon]
+AutomaticLoginEnable=True
+AutomaticLogin=$GuestUser
+WaylandEnable=false
+EOF
+
+systemctl enable gdm
+"@
+    } else { "" }
 
     # Shared folder post-install block
     $sharedFolderPost = ""
@@ -648,7 +676,7 @@ Requires=vboxadd.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/mount -t vboxsf $SharedFolderName /mnt/shared -o uid=1000,gid=1000
+ExecStart=/bin/mount -t vboxsf '$SharedFolderName' /mnt/shared -o uid=1000,gid=1000
 RemainAfterExit=yes
 
 [Install]
@@ -695,23 +723,13 @@ curl
 wget
 git
 htop
-vim-enhanced
-gnome-tweaks
+vim-enhanced$desktopPackages
 %end
 
 %post --erroronfail
 $sudoersLine
 chmod 440 /etc/sudoers.d/90-$GuestUser
-
-mkdir -p /etc/gdm
-cat > /etc/gdm/custom.conf <<'EOF'
-[daemon]
-AutomaticLoginEnable=True
-AutomaticLogin=$GuestUser
-WaylandEnable=false
-EOF
-
-systemctl enable gdm
+$desktopPostSetup
 systemctl enable sshd
 systemctl disable initial-setup.service || true
 systemctl disable gnome-initial-setup.service || true
@@ -1502,7 +1520,7 @@ function Main {
     Write-Host "  VM Name:      $VMName" -ForegroundColor White
     Write-Host "  Distro:       $Distro $FedoraVersion" -ForegroundColor White
     Write-Host "  Username:     $GuestUsername" -ForegroundColor White
-    Write-Host "  Password:     $GuestPassword" -ForegroundColor White
+    Write-Host "  Password:     ********  (as configured)" -ForegroundColor White
     Write-Host "  Hostname:     $GuestHostname" -ForegroundColor White
     Write-Host "  SSH:          ssh -p $SSHHostPort $GuestUsername@localhost" -ForegroundColor White
     Write-Host "  VM Folder:    $($vmInfo.VMDir)" -ForegroundColor White

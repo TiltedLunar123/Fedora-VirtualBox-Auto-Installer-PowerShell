@@ -246,6 +246,41 @@ Describe "New-KickstartFile" {
         It "Should contain ALL=(ALL) ALL for sudo" {
             $ksContent | Should -Match "ALL=\(ALL\) ALL"
         }
+
+        It "Should NOT include gnome-tweaks for server environments" {
+            $ksContent | Should -Not -Match "gnome-tweaks"
+        }
+
+        It "Should NOT include GDM auto-login for server environments" {
+            $ksContent | Should -Not -Match "AutomaticLoginEnable"
+            $ksContent | Should -Not -Match "systemctl enable gdm"
+        }
+    }
+
+    Context "Workstation Kickstart desktop packages" {
+        BeforeAll {
+            $ksPath = Join-Path $testDir "ks-workstation.cfg"
+            $null = New-KickstartFile `
+                -Path $ksPath `
+                -GuestUser "user" `
+                -GuestPass "pass" `
+                -Hostname "fedora-vm" `
+                -Timezone "UTC" `
+                -PackageGroup "@^workstation-product-environment"
+            $ksContent = Get-Content $ksPath -Raw
+        }
+
+        It "Should include gnome-tweaks for workstation" {
+            $ksContent | Should -Match "gnome-tweaks"
+        }
+
+        It "Should include GDM auto-login for workstation" {
+            $ksContent | Should -Match "AutomaticLoginEnable=True"
+        }
+
+        It "Should enable GDM service for workstation" {
+            $ksContent | Should -Match "systemctl enable gdm"
+        }
     }
 
     Context "Kickstart with shared folder" {
