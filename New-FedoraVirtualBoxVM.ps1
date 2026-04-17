@@ -640,6 +640,25 @@ function New-KickstartFile {
         "echo `"$GuestUser ALL=(ALL) NOPASSWD: ALL`" > /etc/sudoers.d/90-$GuestUser"
     }
 
+    $isWorkstation = $PackageGroup -match 'workstation-product-environment'
+
+    $desktopPackages = if ($isWorkstation) { "`ngnome-tweaks" } else { "" }
+
+    $desktopPostSetup = if ($isWorkstation) {
+        @"
+
+mkdir -p /etc/gdm
+cat > /etc/gdm/custom.conf <<'EOF'
+[daemon]
+AutomaticLoginEnable=True
+AutomaticLogin=$GuestUser
+WaylandEnable=false
+EOF
+
+systemctl enable gdm
+"@
+    } else { "" }
+
     # Shared folder post-install block
     $sharedFolderPost = ""
     if ($SharedFolderName) {
@@ -704,23 +723,13 @@ curl
 wget
 git
 htop
-vim-enhanced
-gnome-tweaks
+vim-enhanced$desktopPackages
 %end
 
 %post --erroronfail
 $sudoersLine
 chmod 440 /etc/sudoers.d/90-$GuestUser
-
-mkdir -p /etc/gdm
-cat > /etc/gdm/custom.conf <<'EOF'
-[daemon]
-AutomaticLoginEnable=True
-AutomaticLogin=$GuestUser
-WaylandEnable=false
-EOF
-
-systemctl enable gdm
+$desktopPostSetup
 systemctl enable sshd
 systemctl disable initial-setup.service || true
 systemctl disable gnome-initial-setup.service || true
