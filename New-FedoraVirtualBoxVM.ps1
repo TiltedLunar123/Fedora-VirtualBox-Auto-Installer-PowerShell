@@ -1506,7 +1506,7 @@ function Main {
     Write-Host "  VM Name:      $VMName" -ForegroundColor White
     Write-Host "  Distro:       $Distro $FedoraVersion" -ForegroundColor White
     Write-Host "  Username:     $GuestUsername" -ForegroundColor White
-    Write-Host "  Password:     $GuestPassword" -ForegroundColor White
+    Write-Host "  Password:     ********  (as configured)" -ForegroundColor White
     Write-Host "  Hostname:     $GuestHostname" -ForegroundColor White
     Write-Host "  SSH:          ssh -p $SSHHostPort $GuestUsername@localhost" -ForegroundColor White
     Write-Host "  VM Folder:    $($vmInfo.VMDir)" -ForegroundColor White
