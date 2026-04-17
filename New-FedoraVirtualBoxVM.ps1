@@ -51,13 +51,16 @@
 
 [CmdletBinding()]
 param(
+    [ValidatePattern('^[a-zA-Z0-9._-]+$')]
     [string]$VMName = "Fedora-Workstation",
     [string]$FedoraVersion = "43",
     [string]$VMBaseDir = "$env:USERPROFILE\VirtualBox VMs",
     [string]$ISOPath,
     [ValidateNotNullOrEmpty()]
+    [ValidatePattern('^[a-zA-Z0-9._-]+$')]
     [string]$GuestUsername = "user",
     [ValidateNotNullOrEmpty()]
+    [ValidatePattern("^[^'`$]+$")]
     [string]$GuestPassword = "fedora",
     [string]$GuestHostname,
     [string]$GuestTimezone = "America/New_York",
@@ -614,6 +617,7 @@ function New-KickstartFile {
         [Parameter(Mandatory)][string]$Timezone,
         [Parameter(Mandatory)][string]$PackageGroup,
         [switch]$SecureSudoMode,
+        [ValidatePattern('^[a-zA-Z0-9._-]*$')]
         [string]$SharedFolderName
     )
 
@@ -648,7 +652,7 @@ Requires=vboxadd.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/mount -t vboxsf $SharedFolderName /mnt/shared -o uid=1000,gid=1000
+ExecStart=/bin/mount -t vboxsf '$SharedFolderName' /mnt/shared -o uid=1000,gid=1000
 RemainAfterExit=yes
 
 [Install]
