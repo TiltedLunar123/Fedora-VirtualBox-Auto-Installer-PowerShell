@@ -417,6 +417,26 @@ function Get-OptimalVMConfig {
     return $config
 }
 
+function Test-ValidHostname {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Hostname
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Hostname)) { return $false }
+    if ($Hostname.Length -gt 253) { return $false }
+
+    # Labels separated by dots. Each label: 1-63 chars, [a-z0-9], no leading/trailing hyphen.
+    # RFC 1123 permits digit-leading labels. Enforce lowercase only to avoid
+    # case-sensitivity surprises in guest networking.
+    # -cnotmatch is case-sensitive; default -notmatch would accept uppercase.
+    $labelPattern = '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+    foreach ($label in $Hostname.Split('.')) {
+        if ($label.Length -lt 1 -or $label.Length -gt 63) { return $false }
+        if ($label -cnotmatch $labelPattern) { return $false }
+    }
+    return $true
+}
+
 function Find-VBoxManage {
     Write-Host "`n  -- Locating VirtualBox --" -ForegroundColor $Script:Colors.Header
 
@@ -438,8 +458,7 @@ function Find-VBoxManage {
         }
     }
 
-    Start-Process "https://www.virtualbox.org/wiki/Downloads"
-    throw "VBoxManage.exe not found. Install VirtualBox first, then rerun."
+    throw "VBoxManage.exe not found. Install VirtualBox from https://www.virtualbox.org/wiki/Downloads, then rerun."
 }
 
 function Get-FreeDriveLetter {
@@ -1300,9 +1319,17 @@ function Main {
         $GuestHostname = $distroConfig.DefaultHostname
     }
 
+    if (-not (Test-ValidHostname -Hostname $GuestHostname)) {
+        throw "Invalid GuestHostname '$GuestHostname'. Must follow RFC 1123: lowercase letters, digits, hyphens only; no leading/trailing hyphen; labels 1-63 chars; total <=253 chars."
+    }
+
     # Override VMName default if using non-Fedora distro
     if ($VMName -eq "Fedora-Workstation" -and $Distro -ne "Fedora") {
         $VMName = "$Distro-Workstation"
+    }
+
+    if ($SharedFolder -and -not (Test-Path -LiteralPath $SharedFolder -PathType Container)) {
+        throw "SharedFolder path does not exist or is not a directory: '$SharedFolder'. Create the directory first or omit -SharedFolder."
     }
 
     $vmDir = Join-Path $VMBaseDir $VMName
