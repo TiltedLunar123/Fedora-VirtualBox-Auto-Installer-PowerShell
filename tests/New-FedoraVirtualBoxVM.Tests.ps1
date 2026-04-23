@@ -378,3 +378,15 @@ Describe "New-SHA512CryptHash" {
         }
     }
 }
+
+Describe "Find-VBoxManage (#14)" {
+    It "Does not invoke Start-Process (no browser side-effect)" {
+        $fn = Get-Command Find-VBoxManage
+        $fn.Definition | Should -Not -Match 'Start-Process'
+    }
+
+    It "References the VirtualBox download URL in its throw message" {
+        $fn = Get-Command Find-VBoxManage
+        $fn.Definition | Should -Match 'virtualbox\.org/wiki/Downloads'
+    }
+}

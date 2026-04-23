@@ -426,8 +426,7 @@ function Find-VBoxManage {
         }
     }
 
-    Start-Process "https://www.virtualbox.org/wiki/Downloads"
-    throw "VBoxManage.exe not found. Install VirtualBox first, then rerun."
+    throw "VBoxManage.exe not found. Install VirtualBox from https://www.virtualbox.org/wiki/Downloads, then rerun."
 }
 
 function Get-FreeDriveLetter {
