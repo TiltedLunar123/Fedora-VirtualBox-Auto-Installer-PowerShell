@@ -379,6 +379,59 @@ Describe "New-SHA512CryptHash" {
     }
 }
 
+Describe "Test-ValidHostname (#20)" {
+    It "Accepts simple lowercase hostname" {
+        Test-ValidHostname -Hostname "fedora-vm" | Should -BeTrue
+    }
+
+    It "Accepts multi-label FQDN" {
+        Test-ValidHostname -Hostname "host-1.lab.example" | Should -BeTrue
+    }
+
+    It "Accepts digit-leading labels (RFC 1123)" {
+        Test-ValidHostname -Hostname "1host" | Should -BeTrue
+    }
+
+    It "Rejects empty string" {
+        Test-ValidHostname -Hostname "" | Should -BeFalse
+    }
+
+    It "Rejects uppercase letters" {
+        Test-ValidHostname -Hostname "Fedora-VM" | Should -BeFalse
+    }
+
+    It "Rejects underscore" {
+        Test-ValidHostname -Hostname "fedora_vm" | Should -BeFalse
+    }
+
+    It "Rejects leading hyphen" {
+        Test-ValidHostname -Hostname "-fedora" | Should -BeFalse
+    }
+
+    It "Rejects trailing hyphen" {
+        Test-ValidHostname -Hostname "fedora-" | Should -BeFalse
+    }
+
+    It "Rejects label longer than 63 chars" {
+        $longLabel = "a" * 64
+        Test-ValidHostname -Hostname $longLabel | Should -BeFalse
+    }
+
+    It "Accepts label exactly 63 chars" {
+        $maxLabel = "a" * 63
+        Test-ValidHostname -Hostname $maxLabel | Should -BeTrue
+    }
+
+    It "Rejects total length over 253" {
+        $hn = (("a" * 63 + ".") * 4).TrimEnd('.')
+        Test-ValidHostname -Hostname $hn | Should -BeFalse
+    }
+
+    It "Rejects space in hostname" {
+        Test-ValidHostname -Hostname "fedora vm" | Should -BeFalse
+    }
+}
+
 Describe "Find-VBoxManage (#14)" {
     It "Does not invoke Start-Process (no browser side-effect)" {
         $fn = Get-Command Find-VBoxManage
