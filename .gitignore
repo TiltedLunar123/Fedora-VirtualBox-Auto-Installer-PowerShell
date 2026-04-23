@@ -35,3 +35,6 @@ ehthumbs.db
 *.suo
 *.user
 *.sln.docstates
+
+# Local daily work plan (not tracked)
+PLAN_TODAY.md
