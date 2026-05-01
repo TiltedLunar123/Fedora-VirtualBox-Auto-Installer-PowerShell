@@ -1372,6 +1372,13 @@ function Main {
         if (-not (Test-Path $fedoraISO)) {
             Write-Step "Previously used ISO not found at $fedoraISO. Re-downloading." "WARN"
             $fedoraISO = Get-FedoraNetinstISO -Version $FedoraVersion -ProvidedISOPath $ISOPath -DistroName $Distro
+            $currentState = @{}
+            foreach ($prop in $state.PSObject.Properties) {
+                $currentState[$prop.Name] = $prop.Value
+            }
+            $currentState["iso_path"] = $fedoraISO
+            Save-ProvisionState -StatePath $statePath -State $currentState
+            $state = Get-ProvisionState -StatePath $statePath
         }
         Write-Step "ISO already ready: $fedoraISO" "DONE"
     }
