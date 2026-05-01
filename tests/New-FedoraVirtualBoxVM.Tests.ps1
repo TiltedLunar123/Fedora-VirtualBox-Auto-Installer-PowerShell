@@ -598,3 +598,59 @@ Describe "Find-VBoxManage (#14)" {
         $fn.Definition | Should -Match 'virtualbox\.org/wiki/Downloads'
     }
 }
+
+Describe "Test-PortAvailable (#11)" {
+    It "Returns true for a port that is free" {
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+        $listener.Start()
+        $freePort = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+        $listener.Stop()
+
+        Test-PortAvailable -Port $freePort | Should -BeTrue
+    }
+
+    It "Returns false for a port that is currently bound" {
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+        $listener.Start()
+        $busyPort = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+        try {
+            Test-PortAvailable -Port $busyPort | Should -BeFalse
+        }
+        finally {
+            $listener.Stop()
+        }
+    }
+
+    It "Returns false for an out-of-range port" {
+        Test-PortAvailable -Port 0 | Should -BeFalse
+        Test-PortAvailable -Port 70000 | Should -BeFalse
+    }
+}
+
+Describe "New-OEMDRVVHD (#8)" {
+    It "Wraps diskpart attach in try/finally" {
+        $fn = Get-Command New-OEMDRVVHD
+        $fn.Definition | Should -Match 'try\s*\{'
+        $fn.Definition | Should -Match 'finally\s*\{'
+    }
+
+    It "Tracks attached state and only detaches when attached" {
+        $fn = Get-Command New-OEMDRVVHD
+        $fn.Definition | Should -Match '\$attached\s*=\s*\$false'
+        $fn.Definition | Should -Match '\$attached\s*=\s*\$true'
+    }
+}
+
+Describe "Wait-ForInstallShutdown (#21)" {
+    It "Returns an object with Finished and LastState properties" {
+        $fn = Get-Command Wait-ForInstallShutdown
+        $fn.Definition | Should -Match 'Finished\s*=\s*\$true'
+        $fn.Definition | Should -Match 'Finished\s*=\s*\$false'
+        $fn.Definition | Should -Match 'LastState'
+    }
+
+    It "Logs the last VM state before returning on timeout" {
+        $fn = Get-Command Wait-ForInstallShutdown
+        $fn.Definition | Should -Match 'Last reported VM state'
+    }
+}

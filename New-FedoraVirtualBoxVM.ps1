@@ -471,6 +471,36 @@ function Get-FreeDriveLetter {
     throw "No free drive letter available."
 }
 
+function Test-PortAvailable {
+    param(
+        [Parameter(Mandatory)][int]$Port
+    )
+
+    if ($Port -lt 1 -or $Port -gt 65535) {
+        return $false
+    }
+
+    $listener = $null
+    try {
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
+        $listener.Start()
+        return $true
+    }
+    catch {
+        return $false
+    }
+    finally {
+        if ($null -ne $listener) {
+            try {
+                $listener.Stop()
+            }
+            catch {
+                $null = $_
+            }
+        }
+    }
+}
+
 # --- ISO checksum verification ---
 
 function Test-ISOChecksum {
@@ -780,8 +810,11 @@ function New-OEMDRVVHD {
 
     $driveLetter = Get-FreeDriveLetter
     $diskpartScript = Join-Path $env:TEMP "diskpart-oemdrv-create.txt"
+    $diskpartDetach = Join-Path $env:TEMP "diskpart-oemdrv-detach.txt"
+    $attached = $false
 
-    @"
+    try {
+        @"
 create vdisk file="$VHDPath" maximum=64 type=expandable
 select vdisk file="$VHDPath"
 attach vdisk
@@ -791,23 +824,34 @@ assign letter=$driveLetter
 exit
 "@ | Out-File -FilePath $diskpartScript -Encoding ascii -Force
 
-    $dpOut = Invoke-ExternalCommand -FilePath "diskpart.exe" -Arguments @("/s", $diskpartScript)
-    Remove-Item $diskpartScript -Force -ErrorAction SilentlyContinue
+        $dpOut = Invoke-ExternalCommand -FilePath "diskpart.exe" -Arguments @("/s", $diskpartScript)
+        Remove-Item $diskpartScript -Force -ErrorAction SilentlyContinue
+        $attached = $true
 
-    $dest = "${driveLetter}:\ks.cfg"
-    Copy-Item -Path $KickstartPath -Destination $dest -Force
-    Write-Step "Copied ks.cfg to ${driveLetter}:\ " "DONE"
-
-    $diskpartDetach = Join-Path $env:TEMP "diskpart-oemdrv-detach.txt"
-
-    @"
+        $dest = "${driveLetter}:\ks.cfg"
+        Copy-Item -Path $KickstartPath -Destination $dest -Force
+        Write-Step "Copied ks.cfg to ${driveLetter}:\ " "DONE"
+    }
+    finally {
+        if ($attached) {
+            try {
+                @"
 select vdisk file="$VHDPath"
 detach vdisk
 exit
 "@ | Out-File -FilePath $diskpartDetach -Encoding ascii -Force
 
-    $null = Invoke-ExternalCommand -FilePath "diskpart.exe" -Arguments @("/s", $diskpartDetach)
-    Remove-Item $diskpartDetach -Force -ErrorAction SilentlyContinue
+                $null = Invoke-ExternalCommand -FilePath "diskpart.exe" -Arguments @("/s", $diskpartDetach) -NoThrow
+            }
+            catch {
+                Write-Step "Failed to detach OEMDRV VHD cleanly: $($_.Exception.Message)" "WARN"
+            }
+            Remove-Item $diskpartDetach -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path $diskpartScript) {
+            Remove-Item $diskpartScript -Force -ErrorAction SilentlyContinue
+        }
+    }
 
     Write-Step "OEMDRV VHD ready: $VHDPath" "DONE"
     return $VHDPath
@@ -1053,10 +1097,14 @@ function Wait-ForInstallShutdown {
 
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
     $lastState = ""
+    $finalState = ""
 
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 15
         $state = Get-VMState -VBoxManage $VBoxManage -VMName $VMName
+        if (-not [string]::IsNullOrWhiteSpace($state)) {
+            $finalState = $state
+        }
 
         if ($state -ne $lastState -and -not [string]::IsNullOrWhiteSpace($state)) {
             Write-Step "VM state: $state" "INFO"
@@ -1065,11 +1113,15 @@ function Wait-ForInstallShutdown {
 
         if ($state -eq "poweroff") {
             Write-Step "Install appears complete. VM powered off." "DONE"
-            return $true
+            return [PSCustomObject]@{ Finished = $true; LastState = $state }
         }
     }
 
-    return $false
+    if ([string]::IsNullOrWhiteSpace($finalState)) {
+        $finalState = "unknown (VM did not report state)"
+    }
+    Write-Step "Install timeout reached. Last reported VM state: $finalState" "WARN"
+    return [PSCustomObject]@{ Finished = $false; LastState = $finalState }
 }
 
 function Finalize-VMAfterInstall {
@@ -1254,13 +1306,9 @@ function Invoke-ValidateMode {
 
     # SSH port conflict
     $portInUse = $false
-    try {
-        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $SSHHostPort)
-        $listener.Start()
-        $listener.Stop()
+    if (Test-PortAvailable -Port $SSHHostPort) {
         Write-Step "SSH port ${SSHHostPort}: Available" "DONE"
-    }
-    catch {
+    } else {
         Write-Step "SSH port ${SSHHostPort}: Already in use" "WARN"
         $portInUse = $true
     }
@@ -1353,6 +1401,10 @@ function Main {
 
     Test-HostVirtualizationWarnings
 
+    if (-not (Test-PortAvailable -Port $SSHHostPort)) {
+        throw "SSH host port $SSHHostPort is already in use. Pick a free port with -SSHHostPort, stop the conflicting service, or rerun the script with -Validate to confirm."
+    }
+
     $specs = Get-SystemSpecs
     $vmConfig = Get-OptimalVMConfig -Specs $specs
     $vboxManage = Find-VBoxManage
@@ -1372,6 +1424,13 @@ function Main {
         if (-not (Test-Path $fedoraISO)) {
             Write-Step "Previously used ISO not found at $fedoraISO. Re-downloading." "WARN"
             $fedoraISO = Get-FedoraNetinstISO -Version $FedoraVersion -ProvidedISOPath $ISOPath -DistroName $Distro
+            $currentState = @{}
+            foreach ($prop in $state.PSObject.Properties) {
+                $currentState[$prop.Name] = $prop.Value
+            }
+            $currentState["iso_path"] = $fedoraISO
+            Save-ProvisionState -StatePath $statePath -State $currentState
+            $state = Get-ProvisionState -StatePath $statePath
         }
         Write-Step "ISO already ready: $fedoraISO" "DONE"
     }
@@ -1480,13 +1539,13 @@ function Main {
             }
         }
 
-        $finished = Wait-ForInstallShutdown `
+        $waitResult = Wait-ForInstallShutdown `
             -VBoxManage $vboxManage `
             -VMName $VMName `
             -TimeoutMinutes $InstallTimeoutMinutes
 
-        if (-not $finished) {
-            throw "Install did not finish within $InstallTimeoutMinutes minutes. Check the VM console. Kickstart: $ksPath"
+        if (-not $waitResult.Finished) {
+            throw "Install did not finish within $InstallTimeoutMinutes minutes. Last VM state: $($waitResult.LastState). Check the VM console. Kickstart: $ksPath"
         }
 
         $currentState = @{
