@@ -471,6 +471,36 @@ function Get-FreeDriveLetter {
     throw "No free drive letter available."
 }
 
+function Test-PortAvailable {
+    param(
+        [Parameter(Mandatory)][int]$Port
+    )
+
+    if ($Port -lt 1 -or $Port -gt 65535) {
+        return $false
+    }
+
+    $listener = $null
+    try {
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
+        $listener.Start()
+        return $true
+    }
+    catch {
+        return $false
+    }
+    finally {
+        if ($null -ne $listener) {
+            try {
+                $listener.Stop()
+            }
+            catch {
+                $null = $_
+            }
+        }
+    }
+}
+
 # --- ISO checksum verification ---
 
 function Test-ISOChecksum {
@@ -1276,13 +1306,9 @@ function Invoke-ValidateMode {
 
     # SSH port conflict
     $portInUse = $false
-    try {
-        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $SSHHostPort)
-        $listener.Start()
-        $listener.Stop()
+    if (Test-PortAvailable -Port $SSHHostPort) {
         Write-Step "SSH port ${SSHHostPort}: Available" "DONE"
-    }
-    catch {
+    } else {
         Write-Step "SSH port ${SSHHostPort}: Already in use" "WARN"
         $portInUse = $true
     }
@@ -1374,6 +1400,10 @@ function Main {
     }
 
     Test-HostVirtualizationWarnings
+
+    if (-not (Test-PortAvailable -Port $SSHHostPort)) {
+        throw "SSH host port $SSHHostPort is already in use. Pick a free port with -SSHHostPort, stop the conflicting service, or rerun the script with -Validate to confirm."
+    }
 
     $specs = Get-SystemSpecs
     $vmConfig = Get-OptimalVMConfig -Specs $specs
