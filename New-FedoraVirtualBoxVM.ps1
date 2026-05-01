@@ -1067,10 +1067,14 @@ function Wait-ForInstallShutdown {
 
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
     $lastState = ""
+    $finalState = ""
 
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 15
         $state = Get-VMState -VBoxManage $VBoxManage -VMName $VMName
+        if (-not [string]::IsNullOrWhiteSpace($state)) {
+            $finalState = $state
+        }
 
         if ($state -ne $lastState -and -not [string]::IsNullOrWhiteSpace($state)) {
             Write-Step "VM state: $state" "INFO"
@@ -1079,11 +1083,15 @@ function Wait-ForInstallShutdown {
 
         if ($state -eq "poweroff") {
             Write-Step "Install appears complete. VM powered off." "DONE"
-            return $true
+            return [PSCustomObject]@{ Finished = $true; LastState = $state }
         }
     }
 
-    return $false
+    if ([string]::IsNullOrWhiteSpace($finalState)) {
+        $finalState = "unknown (VM did not report state)"
+    }
+    Write-Step "Install timeout reached. Last reported VM state: $finalState" "WARN"
+    return [PSCustomObject]@{ Finished = $false; LastState = $finalState }
 }
 
 function Finalize-VMAfterInstall {
@@ -1501,13 +1509,13 @@ function Main {
             }
         }
 
-        $finished = Wait-ForInstallShutdown `
+        $waitResult = Wait-ForInstallShutdown `
             -VBoxManage $vboxManage `
             -VMName $VMName `
             -TimeoutMinutes $InstallTimeoutMinutes
 
-        if (-not $finished) {
-            throw "Install did not finish within $InstallTimeoutMinutes minutes. Check the VM console. Kickstart: $ksPath"
+        if (-not $waitResult.Finished) {
+            throw "Install did not finish within $InstallTimeoutMinutes minutes. Last VM state: $($waitResult.LastState). Check the VM console. Kickstart: $ksPath"
         }
 
         $currentState = @{
