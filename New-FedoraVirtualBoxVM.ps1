@@ -780,8 +780,11 @@ function New-OEMDRVVHD {
 
     $driveLetter = Get-FreeDriveLetter
     $diskpartScript = Join-Path $env:TEMP "diskpart-oemdrv-create.txt"
+    $diskpartDetach = Join-Path $env:TEMP "diskpart-oemdrv-detach.txt"
+    $attached = $false
 
-    @"
+    try {
+        @"
 create vdisk file="$VHDPath" maximum=64 type=expandable
 select vdisk file="$VHDPath"
 attach vdisk
@@ -791,23 +794,34 @@ assign letter=$driveLetter
 exit
 "@ | Out-File -FilePath $diskpartScript -Encoding ascii -Force
 
-    $dpOut = Invoke-ExternalCommand -FilePath "diskpart.exe" -Arguments @("/s", $diskpartScript)
-    Remove-Item $diskpartScript -Force -ErrorAction SilentlyContinue
+        $dpOut = Invoke-ExternalCommand -FilePath "diskpart.exe" -Arguments @("/s", $diskpartScript)
+        Remove-Item $diskpartScript -Force -ErrorAction SilentlyContinue
+        $attached = $true
 
-    $dest = "${driveLetter}:\ks.cfg"
-    Copy-Item -Path $KickstartPath -Destination $dest -Force
-    Write-Step "Copied ks.cfg to ${driveLetter}:\ " "DONE"
-
-    $diskpartDetach = Join-Path $env:TEMP "diskpart-oemdrv-detach.txt"
-
-    @"
+        $dest = "${driveLetter}:\ks.cfg"
+        Copy-Item -Path $KickstartPath -Destination $dest -Force
+        Write-Step "Copied ks.cfg to ${driveLetter}:\ " "DONE"
+    }
+    finally {
+        if ($attached) {
+            try {
+                @"
 select vdisk file="$VHDPath"
 detach vdisk
 exit
 "@ | Out-File -FilePath $diskpartDetach -Encoding ascii -Force
 
-    $null = Invoke-ExternalCommand -FilePath "diskpart.exe" -Arguments @("/s", $diskpartDetach)
-    Remove-Item $diskpartDetach -Force -ErrorAction SilentlyContinue
+                $null = Invoke-ExternalCommand -FilePath "diskpart.exe" -Arguments @("/s", $diskpartDetach) -NoThrow
+            }
+            catch {
+                Write-Step "Failed to detach OEMDRV VHD cleanly: $($_.Exception.Message)" "WARN"
+            }
+            Remove-Item $diskpartDetach -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path $diskpartScript) {
+            Remove-Item $diskpartScript -Force -ErrorAction SilentlyContinue
+        }
+    }
 
     Write-Step "OEMDRV VHD ready: $VHDPath" "DONE"
     return $VHDPath
