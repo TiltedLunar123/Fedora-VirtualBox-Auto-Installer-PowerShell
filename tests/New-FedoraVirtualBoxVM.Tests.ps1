@@ -654,3 +654,87 @@ Describe "Wait-ForInstallShutdown (#21)" {
         $fn.Definition | Should -Match 'Last reported VM state'
     }
 }
+
+Describe "Get-DistroConfig version validation (#19)" {
+    It "Accepts a plain numeric version" {
+        { Get-DistroConfig -Distro "Fedora" -Version "43" } | Should -Not -Throw
+    }
+
+    It "Accepts a major.minor version" {
+        { Get-DistroConfig -Distro "AlmaLinux" -Version "9.4" } | Should -Not -Throw
+    }
+
+    It "Rejects path traversal in the version" {
+        { Get-DistroConfig -Distro "Fedora" -Version "../../etc/passwd" } | Should -Throw
+    }
+
+    It "Rejects letters in the version" {
+        { Get-DistroConfig -Distro "Fedora" -Version "43abc" } | Should -Throw
+    }
+
+    It "Rejects URL-injection characters in the version" {
+        { Get-DistroConfig -Distro "Fedora" -Version "43?evil=1" } | Should -Throw
+    }
+}
+
+Describe "New-SHA512CryptHash secret handling (#1, #2)" {
+    It "Uses openssl with -stdin instead of a positional password" {
+        $fn = Get-Command New-SHA512CryptHash
+        $fn.Definition | Should -Match 'openssl passwd -6 -stdin'
+        $fn.Definition | Should -Not -Match 'openssl passwd -6 \$Passphrase'
+    }
+
+    It "Pipes the passphrase into openssl via stdin" {
+        $fn = Get-Command New-SHA512CryptHash
+        $fn.Definition | Should -Match '\$Passphrase\s*\|\s*&\s*openssl'
+    }
+
+    It "Reads the python fallback password from an env var, not the command line" {
+        $fn = Get-Command New-SHA512CryptHash
+        $fn.Definition | Should -Match 'VBOX_KS_PASSWD'
+        $fn.Definition | Should -Match 'os\.environ'
+        $fn.Definition | Should -Not -Match "crypt\.crypt\('\$Passphrase'"
+    }
+
+    It "Restores or removes the env var after the python fallback runs" {
+        $fn = Get-Command New-SHA512CryptHash
+        $fn.Definition | Should -Match 'finally\s*\{'
+        $fn.Definition | Should -Match 'Remove-Item Env:VBOX_KS_PASSWD'
+    }
+}
+
+Describe "Test-SafeDiskpartPath (#18)" {
+    It "Accepts a normal Windows VHD path" {
+        Test-SafeDiskpartPath -Path 'C:\Users\me\VirtualBox VMs\Fedora\oemdrv.vhd' | Should -BeTrue
+    }
+
+    It "Rejects whitespace-only path" {
+        Test-SafeDiskpartPath -Path '   ' | Should -BeFalse
+    }
+
+    It "Rejects a path containing a double quote" {
+        Test-SafeDiskpartPath -Path 'C:\evil".vhd' | Should -BeFalse
+    }
+
+    It "Rejects a path containing a newline" {
+        Test-SafeDiskpartPath -Path "C:\evil`nattach vdisk" | Should -BeFalse
+    }
+
+    It "Rejects a path containing a carriage return" {
+        Test-SafeDiskpartPath -Path "C:\evil`rattach vdisk" | Should -BeFalse
+    }
+
+    It "Rejects a path containing redirect or pipe characters" {
+        Test-SafeDiskpartPath -Path 'C:\evil>out.txt' | Should -BeFalse
+        Test-SafeDiskpartPath -Path 'C:\evil|cmd' | Should -BeFalse
+        Test-SafeDiskpartPath -Path 'C:\evil&whoami' | Should -BeFalse
+    }
+}
+
+Describe "New-OEMDRVVHD path guard (#18)" {
+    It "Throws before touching diskpart when the VHD path is unsafe" {
+        {
+            New-OEMDRVVHD -VHDPath "C:\bad`nattach vdisk" -KickstartPath "C:\ks.cfg"
+        } | Should -Throw '*unsafe path*'
+    }
+}

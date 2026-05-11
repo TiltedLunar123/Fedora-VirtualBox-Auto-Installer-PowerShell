@@ -53,6 +53,7 @@
 param(
     [ValidatePattern('^[a-zA-Z0-9._-]+$')]
     [string]$VMName = "Fedora-Workstation",
+    [ValidatePattern('^[0-9]{1,4}(\.[0-9]{1,4})?$')]
     [string]$FedoraVersion = "43",
     [string]$VMBaseDir = "$env:USERPROFILE\VirtualBox VMs",
     [string]$ISOPath,
@@ -145,7 +146,9 @@ function Write-Step {
 function Get-DistroConfig {
     param(
         [Parameter(Mandatory)][string]$Distro,
-        [Parameter(Mandatory)][string]$Version
+        [Parameter(Mandatory)]
+        [ValidatePattern('^[0-9]{1,4}(\.[0-9]{1,4})?$')]
+        [string]$Version
     )
 
     switch ($Distro) {
@@ -193,21 +196,42 @@ function Get-DistroConfig {
 function New-SHA512CryptHash {
     param([string]$Passphrase)
 
+    # Keep secrets off the command line. openssl gets the password via
+    # stdin; python reads it from an env var. Either way, Get-Process /
+    # ps / Task Manager only see the binary name and the flag.
+
     $openssl = Get-Command openssl -ErrorAction SilentlyContinue
     if ($openssl) {
-        $hash = & openssl passwd -6 $Passphrase 2>$null
+        $hash = $Passphrase | & openssl passwd -6 -stdin 2>$null
         if ($LASTEXITCODE -eq 0 -and $hash) { return $hash }
     }
 
     $python = Get-Command python3 -ErrorAction SilentlyContinue
     if (-not $python) { $python = Get-Command python -ErrorAction SilentlyContinue }
     if ($python) {
-        $hash = & $python.Source -c "
+        $pyScript = @'
+import os
+pw = os.environ["VBOX_KS_PASSWD"]
 try:
-    import crypt; print(crypt.crypt('$Passphrase', crypt.mksalt(crypt.METHOD_SHA512)))
+    import crypt
+    print(crypt.crypt(pw, crypt.mksalt(crypt.METHOD_SHA512)))
 except (ImportError, AttributeError):
-    from passlib.hash import sha512_crypt; print(sha512_crypt.using(rounds=5000).hash('$Passphrase'))
-" 2>$null
+    from passlib.hash import sha512_crypt
+    print(sha512_crypt.using(rounds=5000).hash(pw))
+'@
+        $hadPrev = Test-Path Env:VBOX_KS_PASSWD
+        $prev = if ($hadPrev) { $env:VBOX_KS_PASSWD } else { $null }
+        $env:VBOX_KS_PASSWD = $Passphrase
+        try {
+            $hash = & $python.Source -c $pyScript 2>$null
+        }
+        finally {
+            if ($hadPrev) {
+                $env:VBOX_KS_PASSWD = $prev
+            } else {
+                Remove-Item Env:VBOX_KS_PASSWD -ErrorAction SilentlyContinue
+            }
+        }
         if ($LASTEXITCODE -eq 0 -and $hash) { return $hash }
     }
 
@@ -796,11 +820,27 @@ $sharedFolderPost
     return $Path
 }
 
+function Test-SafeDiskpartPath {
+    param([Parameter(Mandatory)][string]$Path)
+
+    # Diskpart parses script files line-by-line and treats some characters
+    # as syntactic. Reject anything that could let a hostile path inject
+    # a second command or break the quoting in `file="..."`.
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    if ($Path -match '[\r\n]') { return $false }
+    if ($Path -match '["<>|&]') { return $false }
+    return $true
+}
+
 function New-OEMDRVVHD {
     param(
         [Parameter(Mandatory)][string]$VHDPath,
         [Parameter(Mandatory)][string]$KickstartPath
     )
+
+    if (-not (Test-SafeDiskpartPath -Path $VHDPath)) {
+        throw "Refusing to pass unsafe path to diskpart: '$VHDPath'. Path must not contain quote, redirect, pipe, ampersand, or newline characters."
+    }
 
     Write-Host "`n  -- Creating OEMDRV Disk --" -ForegroundColor $Script:Colors.Header
 
