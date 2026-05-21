@@ -527,6 +527,34 @@ function Test-PortAvailable {
 
 # --- ISO checksum verification ---
 
+function Find-ChecksumFileName {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$ListingContent
+    )
+
+    # Distros name their checksum manifests inconsistently: Fedora uses
+    # *-CHECKSUM, while AlmaLinux/Rocky/CentOS-Stream commonly ship SHA256SUMS
+    # or sha256sum.txt. Try each pattern in order and skip detached signatures.
+    $patterns = @(
+        '[^">\s]*CHECKSUM[^"<\s]*',
+        '[^">\s]*SHA256SUMS[^"<\s]*',
+        '[^">\s]*sha256sum[^"<\s]*'
+    )
+
+    foreach ($pattern in $patterns) {
+        $candidates = [regex]::Matches($ListingContent, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase) |
+            ForEach-Object { $_.Value } |
+            Where-Object { $_ -notmatch '\.(asc|sig|gpg)$' } |
+            Select-Object -Unique
+
+        if ($candidates) {
+            return ($candidates | Select-Object -First 1)
+        }
+    }
+
+    return $null
+}
+
 function Test-ISOChecksum {
     param(
         [Parameter(Mandatory)][string]$ISOPath,
@@ -543,16 +571,13 @@ function Test-ISOChecksum {
         return
     }
 
-    $checksumMatches = [regex]::Matches($listing.Content, '[^">\s]+CHECKSUM[^"<\s]*') |
-        ForEach-Object { $_.Value } |
-        Select-Object -Unique
+    $checksumFile = Find-ChecksumFileName -ListingContent $listing.Content
 
-    if (-not $checksumMatches -or $checksumMatches.Count -eq 0) {
-        Write-Step "No CHECKSUM file found in index listing. Skipping verification." "WARN"
+    if (-not $checksumFile) {
+        Write-Step "No checksum manifest found in index listing. Skipping verification." "WARN"
         return
     }
 
-    $checksumFile = $checksumMatches | Select-Object -First 1
     $checksumUrl = "$IndexUrl$checksumFile"
 
     Write-Step "Downloading checksum file: $checksumFile" "RUNNING"
