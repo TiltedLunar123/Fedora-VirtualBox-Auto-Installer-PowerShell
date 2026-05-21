@@ -76,6 +76,7 @@ param(
     [string]$Distro = "Fedora",
     [switch]$Validate,
     [switch]$KeepArtifacts,
+    [switch]$Resume,
     [switch]$NoResume,
     [switch]$SecureSudo,
     [string]$SharedFolder
@@ -1451,9 +1452,11 @@ function Main {
     $ksPath = Join-Path $workDir "ks.cfg"
     $oemdrvPath = Join-Path $workDir "OEMDRV.vhd"
 
-    # Load resume state
+    # Load resume state. Resume is gated on -Resume or -Force so a failed run
+    # can be picked up with -Resume alone, without -Force also enabling the
+    # destructive VM overwrite in Remove-ExistingVM.
     $state = $null
-    if ($Force -and -not $NoResume) {
+    if (($Resume -or $Force) -and -not $NoResume) {
         $state = Get-ProvisionState -StatePath $statePath
         if ($state) {
             Write-Step "Resuming from previous provisioning state" "INFO"

@@ -132,6 +132,7 @@ The shared folder will be available inside the VM at `/mnt/shared`.
 | `-Distro` | String | `Fedora` | Distribution: `Fedora`, `CentOS-Stream`, `AlmaLinux`, `Rocky` |
 | `-Validate` | Switch | -- | Run pre-flight checks only (dry run) |
 | `-KeepArtifacts` | Switch | -- | Keep `ks.cfg` and `OEMDRV.vhd` after install |
+| `-Resume` | Switch | -- | Resume a failed run from saved state without replacing the VM |
 | `-NoResume` | Switch | -- | Ignore saved state; start provisioning from scratch |
 | `-SecureSudo` | Switch | -- | Require password for sudo (no NOPASSWD) |
 | `-SharedFolder` | String | -- | Host path to share with the guest VM |
@@ -172,7 +173,7 @@ ssh -p 2222 user@localhost
 
 ## Resume / Checkpoint
 
-If provisioning is interrupted, re-running with `-Force` will resume from the last completed step. The script tracks progress in `_autoinstall/provision-state.json`. Use `-NoResume` to force starting from scratch.
+If provisioning is interrupted, re-run with `-Resume` to pick up from the last completed step. The script tracks progress in `_autoinstall/provision-state.json`. `-Force` also resumes, but it additionally allows replacing an existing VM, so reach for `-Resume` when you only want to continue a partial run. Use `-NoResume` to force starting from scratch.
 
 ## Contributing
 
