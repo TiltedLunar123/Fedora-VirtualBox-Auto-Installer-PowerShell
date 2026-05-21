@@ -805,6 +805,10 @@ services --enabled=NetworkManager,sshd
 firstboot --disable
 eula --agreed
 
+# Disk targeting: New-FedoraVM attaches the OS VDI to SATA port 0 and the tiny
+# OEMDRV disk to SATA port 1, so Linux enumerates the OS disk as sda. Anaconda
+# loads this kickstart from the OEMDRV filesystem label, not its device node, so
+# pinning install to sda keeps it off the OEMDRV disk. See README (#15).
 ignoredisk --only-use=sda
 zerombr
 clearpart --all --initlabel --drives=sda
