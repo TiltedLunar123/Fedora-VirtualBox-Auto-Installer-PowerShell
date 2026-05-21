@@ -738,3 +738,45 @@ Describe "New-OEMDRVVHD path guard (#18)" {
         } | Should -Throw '*unsafe path*'
     }
 }
+
+Describe "Find-ChecksumFileName (#7)" {
+    It "Finds a Fedora-style CHECKSUM file" {
+        $listing = '<a href="Fedora-Everything-43-1.1-x86_64-CHECKSUM">link</a>'
+        Find-ChecksumFileName -ListingContent $listing |
+            Should -Be 'Fedora-Everything-43-1.1-x86_64-CHECKSUM'
+    }
+
+    It "Finds an AlmaLinux/Rocky SHA256SUMS file" {
+        $listing = '<a href="SHA256SUMS">SHA256SUMS</a> <a href="AlmaLinux.iso">iso</a>'
+        Find-ChecksumFileName -ListingContent $listing | Should -Be 'SHA256SUMS'
+    }
+
+    It "Finds a sha256sum.txt file" {
+        $listing = 'href="sha256sum.txt" href="boot.iso"'
+        Find-ChecksumFileName -ListingContent $listing | Should -Be 'sha256sum.txt'
+    }
+
+    It "Is case-insensitive for the checksum keyword" {
+        $listing = 'href="checksum"'
+        Find-ChecksumFileName -ListingContent $listing | Should -Be 'checksum'
+    }
+
+    It "Prefers a CHECKSUM file over a SHA256SUMS file when both exist" {
+        $listing = 'href="SHA256SUMS" href="Fedora-CHECKSUM"'
+        Find-ChecksumFileName -ListingContent $listing | Should -Be 'Fedora-CHECKSUM'
+    }
+
+    It "Skips detached signatures and keeps looking" {
+        $listing = 'href="SHA256SUMS.asc" href="SHA256SUMS.sig" href="SHA256SUMS"'
+        Find-ChecksumFileName -ListingContent $listing | Should -Be 'SHA256SUMS'
+    }
+
+    It "Returns null when no checksum manifest is present" {
+        $listing = '<a href="boot.iso">iso</a> <a href="README.txt">readme</a>'
+        Find-ChecksumFileName -ListingContent $listing | Should -BeNullOrEmpty
+    }
+
+    It "Returns null for empty listing content" {
+        Find-ChecksumFileName -ListingContent '' | Should -BeNullOrEmpty
+    }
+}

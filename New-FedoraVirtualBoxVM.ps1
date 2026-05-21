@@ -76,6 +76,7 @@ param(
     [string]$Distro = "Fedora",
     [switch]$Validate,
     [switch]$KeepArtifacts,
+    [switch]$Resume,
     [switch]$NoResume,
     [switch]$SecureSudo,
     [string]$SharedFolder
@@ -527,6 +528,34 @@ function Test-PortAvailable {
 
 # --- ISO checksum verification ---
 
+function Find-ChecksumFileName {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$ListingContent
+    )
+
+    # Distros name their checksum manifests inconsistently: Fedora uses
+    # *-CHECKSUM, while AlmaLinux/Rocky/CentOS-Stream commonly ship SHA256SUMS
+    # or sha256sum.txt. Try each pattern in order and skip detached signatures.
+    $patterns = @(
+        '[^">\s]*CHECKSUM[^"<\s]*',
+        '[^">\s]*SHA256SUMS[^"<\s]*',
+        '[^">\s]*sha256sum[^"<\s]*'
+    )
+
+    foreach ($pattern in $patterns) {
+        $candidates = [regex]::Matches($ListingContent, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase) |
+            ForEach-Object { $_.Value } |
+            Where-Object { $_ -notmatch '\.(asc|sig|gpg)$' } |
+            Select-Object -Unique
+
+        if ($candidates) {
+            return ($candidates | Select-Object -First 1)
+        }
+    }
+
+    return $null
+}
+
 function Test-ISOChecksum {
     param(
         [Parameter(Mandatory)][string]$ISOPath,
@@ -543,16 +572,13 @@ function Test-ISOChecksum {
         return
     }
 
-    $checksumMatches = [regex]::Matches($listing.Content, '[^">\s]+CHECKSUM[^"<\s]*') |
-        ForEach-Object { $_.Value } |
-        Select-Object -Unique
+    $checksumFile = Find-ChecksumFileName -ListingContent $listing.Content
 
-    if (-not $checksumMatches -or $checksumMatches.Count -eq 0) {
-        Write-Step "No CHECKSUM file found in index listing. Skipping verification." "WARN"
+    if (-not $checksumFile) {
+        Write-Step "No checksum manifest found in index listing. Skipping verification." "WARN"
         return
     }
 
-    $checksumFile = $checksumMatches | Select-Object -First 1
     $checksumUrl = "$IndexUrl$checksumFile"
 
     Write-Step "Downloading checksum file: $checksumFile" "RUNNING"
@@ -779,6 +805,10 @@ services --enabled=NetworkManager,sshd
 firstboot --disable
 eula --agreed
 
+# Disk targeting: New-FedoraVM attaches the OS VDI to SATA port 0 and the tiny
+# OEMDRV disk to SATA port 1, so Linux enumerates the OS disk as sda. Anaconda
+# loads this kickstart from the OEMDRV filesystem label, not its device node, so
+# pinning install to sda keeps it off the OEMDRV disk. See README (#15).
 ignoredisk --only-use=sda
 zerombr
 clearpart --all --initlabel --drives=sda
@@ -1426,9 +1456,11 @@ function Main {
     $ksPath = Join-Path $workDir "ks.cfg"
     $oemdrvPath = Join-Path $workDir "OEMDRV.vhd"
 
-    # Load resume state
+    # Load resume state. Resume is gated on -Resume or -Force so a failed run
+    # can be picked up with -Resume alone, without -Force also enabling the
+    # destructive VM overwrite in Remove-ExistingVM.
     $state = $null
-    if ($Force -and -not $NoResume) {
+    if (($Resume -or $Force) -and -not $NoResume) {
         $state = Get-ProvisionState -StatePath $statePath
         if ($state) {
             Write-Step "Resuming from previous provisioning state" "INFO"

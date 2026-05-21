@@ -132,6 +132,7 @@ The shared folder will be available inside the VM at `/mnt/shared`.
 | `-Distro` | String | `Fedora` | Distribution: `Fedora`, `CentOS-Stream`, `AlmaLinux`, `Rocky` |
 | `-Validate` | Switch | -- | Run pre-flight checks only (dry run) |
 | `-KeepArtifacts` | Switch | -- | Keep `ks.cfg` and `OEMDRV.vhd` after install |
+| `-Resume` | Switch | -- | Resume a failed run from saved state without replacing the VM |
 | `-NoResume` | Switch | -- | Ignore saved state; start provisioning from scratch |
 | `-SecureSudo` | Switch | -- | Require password for sudo (no NOPASSWD) |
 | `-SharedFolder` | String | -- | Host path to share with the guest VM |
@@ -172,7 +173,11 @@ ssh -p 2222 user@localhost
 
 ## Resume / Checkpoint
 
-If provisioning is interrupted, re-running with `-Force` will resume from the last completed step. The script tracks progress in `_autoinstall/provision-state.json`. Use `-NoResume` to force starting from scratch.
+If provisioning is interrupted, re-run with `-Resume` to pick up from the last completed step. The script tracks progress in `_autoinstall/provision-state.json`. `-Force` also resumes, but it additionally allows replacing an existing VM, so reach for `-Resume` when you only want to continue a partial run. Use `-NoResume` to force starting from scratch.
+
+## Disk Layout
+
+The kickstart pins the install to `sda` (`ignoredisk --only-use=sda`). That is safe because of how the VM is wired up: the OS VDI lands on SATA port 0 and the small OEMDRV disk (which carries `ks.cfg`) lands on SATA port 1, so Linux enumerates the OS disk as `sda` and the OEMDRV disk as `sdb`. Anaconda finds the kickstart by the OEMDRV filesystem label rather than its device node, so the install never targets the wrong disk. If you change the storage attachment order in `New-FedoraVM`, revisit the `--only-use` drive in the kickstart to match.
 
 ## Contributing
 

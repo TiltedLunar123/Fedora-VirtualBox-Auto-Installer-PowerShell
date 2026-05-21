@@ -8,10 +8,21 @@
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "  Requesting Administrator privileges..." -ForegroundColor Yellow
 
-    $scriptUrl = "https://raw.githubusercontent.com/TiltedLunar123/Fedora-VirtualBox-Auto-Installer-PowerShell/main/install.ps1"
-    $elevatedCmd = "Set-ExecutionPolicy Bypass -Scope Process -Force; irm '$scriptUrl' | iex"
+    # Persist the exact source that is running and elevate against that file,
+    # instead of re-fetching the URL in the elevated process. Downloading twice
+    # opens a TOCTOU gap where the admin run could execute different bytes than
+    # what was first invoked and reviewed (issues #4, #5).
+    if ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPath)) {
+        $selfSource = Get-Content -Raw -LiteralPath $PSCommandPath
+    }
+    else {
+        $selfSource = $MyInvocation.MyCommand.ScriptBlock.ToString()
+    }
 
-    Start-Process powershell -Verb RunAs -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $elevatedCmd
+    $bootstrapPath = Join-Path $env:TEMP ("fvbai-install-{0}.ps1" -f ([guid]::NewGuid().ToString('N')))
+    [System.IO.File]::WriteAllText($bootstrapPath, $selfSource, [System.Text.Encoding]::UTF8)
+
+    Start-Process powershell -Verb RunAs -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", $bootstrapPath
     exit
 }
 
