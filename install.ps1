@@ -33,6 +33,34 @@ $installDir = Join-Path $env:USERPROFILE "Fedora-VirtualBox-Auto-Installer"
 $scriptPath = Join-Path $installDir "New-FedoraVirtualBoxVM.ps1"
 $repoBase = "https://raw.githubusercontent.com/TiltedLunar123/Fedora-VirtualBox-Auto-Installer-PowerShell/main"
 
+function Test-ProvisionerScriptContent {
+    <#
+    .SYNOPSIS
+        Returns $true only when $Content looks like the real provisioner script.
+
+    .DESCRIPTION
+        The old guard executed anything longer than 500 bytes, so a truncated
+        download, an HTML error page, or a captive-portal redirect would have
+        been saved and run as-is (issue #4). This checks that the content parses
+        as PowerShell with no errors and carries the admin requirement header and
+        the New-FedoraVM entry point before it is trusted. It is not a substitute
+        for a signature, but it closes the door on the obvious garbage cases.
+    #>
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Content)
+
+    if ([string]::IsNullOrWhiteSpace($Content)) { return $false }
+    if ($Content.Length -lt 500) { return $false }
+    if ($Content -notmatch '#Requires -RunAsAdministrator') { return $false }
+    if ($Content -notmatch 'function\s+New-FedoraVM\b') { return $false }
+
+    $parseErrors = $null
+    $null = [System.Management.Automation.Language.Parser]::ParseInput(
+        $Content, [ref]$null, [ref]$parseErrors)
+    if ($parseErrors -and $parseErrors.Count -gt 0) { return $false }
+
+    return $true
+}
+
 Write-Host ""
 Write-Host "  ========================================" -ForegroundColor Cyan
 Write-Host "    VirtualBox Auto-Installer - Setup     " -ForegroundColor Cyan
@@ -60,8 +88,9 @@ catch {
     exit 1
 }
 
-if (-not $scriptContent -or $scriptContent.Length -lt 500) {
-    Write-Host "  [-] Download appears incomplete or corrupt." -ForegroundColor Red
+if (-not (Test-ProvisionerScriptContent -Content $scriptContent)) {
+    Write-Host "  [-] Downloaded script failed validation (incomplete, corrupt, or not the expected file)." -ForegroundColor Red
+    Write-Host "  [i] Nothing was saved or run. Check your connection and try again." -ForegroundColor Gray
     Write-Host ""
     Read-Host "  Press Enter to exit"
     exit 1
