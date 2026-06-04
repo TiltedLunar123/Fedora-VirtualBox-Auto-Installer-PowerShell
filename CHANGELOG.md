@@ -2,6 +2,20 @@
 
 All notable changes to VirtualBox Auto-Installer are documented here.
 
+## [Unreleased]
+
+### Security
+- `install.ps1` now validates the downloaded provisioner before saving or
+  running it. The content has to parse as PowerShell with no errors and
+  carry the admin requirement header and the `New-FedoraVM` entry point,
+  which replaces the old length-only check and stops a truncated download,
+  an HTML error page, or a captive-portal redirect from being executed
+  (part of #4). Full signature verification is still tracked as follow-up.
+
+### Added
+- Pester coverage for the new installer validator
+- `install.ps1` is now linted by PSScriptAnalyzer in CI alongside the main script
+
 ## [1.1.0] — 2026-04-12
 
 ### Added
