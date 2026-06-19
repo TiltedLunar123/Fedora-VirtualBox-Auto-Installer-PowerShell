@@ -155,6 +155,12 @@ By default, the guest user gets passwordless sudo (`NOPASSWD: ALL`). Use `-Secur
 
 Downloaded ISOs are automatically verified against the official SHA256 checksum file from the distribution mirror. User-provided ISOs (via `-ISOPath`) skip this check.
 
+### Installer Integrity
+
+`install.ps1` pins the SHA256 of `New-FedoraVirtualBoxVM.ps1` and checks the download against it before anything is saved or run. A copy that doesn't match the pinned hash is refused, so a tampered-but-parseable script never executes. The comparison normalizes line endings and strips a leading BOM first, so it holds across a CRLF checkout and the LF copy served from GitHub.
+
+This is checksum pinning, not code signing. It catches a corrupted, truncated, or swapped provisioner; a full repository compromise that rewrites both files at once is out of scope and would need a signing key. Maintainers refresh the pin with `tools/Update-InstallerHash.ps1` after changing the provisioner, and CI fails if it ever drifts.
+
 ## Files Created
 
 Inside the VM folder, the script creates:
