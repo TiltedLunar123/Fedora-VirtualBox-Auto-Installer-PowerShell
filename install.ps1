@@ -33,6 +33,14 @@ $installDir = Join-Path $env:USERPROFILE "Fedora-VirtualBox-Auto-Installer"
 $scriptPath = Join-Path $installDir "New-FedoraVirtualBoxVM.ps1"
 $repoBase = "https://raw.githubusercontent.com/TiltedLunar123/Fedora-VirtualBox-Auto-Installer-PowerShell/main"
 
+# SHA256 of the canonical (LF line endings, UTF-8, no BOM) form of
+# New-FedoraVirtualBoxVM.ps1. The installer refuses to save or run a download
+# whose digest does not match this pin, so a tampered-but-parseable script is
+# rejected instead of executed (issue #4). Regenerate with
+# tools/Update-InstallerHash.ps1 whenever the provisioner changes;
+# tests/install.Tests.ps1 fails CI if this drifts from the committed script.
+$expectedProvisionerHash = '3731f1d22212eebfaaf5fd3a1cf40a1b21afa10d4fae8a78d1a5c266ec606088'
+
 function Test-ProvisionerScriptContent {
     <#
     .SYNOPSIS
@@ -59,6 +67,69 @@ function Test-ProvisionerScriptContent {
     if ($parseErrors -and $parseErrors.Count -gt 0) { return $false }
 
     return $true
+}
+
+function Get-CanonicalScriptHash {
+    <#
+    .SYNOPSIS
+        SHA256 of script content, computed over a canonical form so that
+        line-ending and BOM differences do not change the result.
+
+    .DESCRIPTION
+        The provisioner can reach this installer through two paths whose bytes
+        are not guaranteed to be identical: the file committed in the repo (which
+        Git may check out with CRLF on Windows) and the copy pulled from
+        raw.githubusercontent.com over HTTP. Hashing the raw bytes would make a
+        correct file fail its own integrity check purely on line endings. So the
+        content is normalized to LF and encoded as UTF-8 without a BOM before it
+        is hashed, and the pinned value in this installer is generated the same
+        way. The output is lowercase hex with no separators.
+    #>
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Content)
+
+    $normalized = $Content -replace "`r`n", "`n" -replace "`r", "`n"
+
+    # Drop a leading BOM character if the decode left one in, so a BOM-prefixed
+    # copy and a BOM-free copy hash the same.
+    if ($normalized.Length -gt 0 -and $normalized[0] -eq [char]0xFEFF) {
+        $normalized = $normalized.Substring(1)
+    }
+
+    $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($normalized)
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = $sha.ComputeHash($bytes)
+    }
+    finally {
+        $sha.Dispose()
+    }
+
+    return ([System.BitConverter]::ToString($digest) -replace '-', '').ToLowerInvariant()
+}
+
+function Test-ProvisionerScriptHash {
+    <#
+    .SYNOPSIS
+        Returns $true only when $Content hashes to $ExpectedHash.
+
+    .DESCRIPTION
+        This is the integrity gate for issue #4. Structural validation
+        (Test-ProvisionerScriptContent) rejects truncated or non-PowerShell
+        downloads, but it would still accept a tampered script that happens to
+        parse and carry the right markers. Pinning the SHA256 closes that gap:
+        the installer only trusts the exact provisioner it was published against.
+        The comparison is canonical (see Get-CanonicalScriptHash) and
+        case-insensitive.
+    #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Content,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$ExpectedHash
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ExpectedHash)) { return $false }
+    $actual = Get-CanonicalScriptHash -Content $Content
+    return ($actual -eq $ExpectedHash.Trim().ToLowerInvariant())
 }
 
 Write-Host ""
@@ -91,6 +162,15 @@ catch {
 if (-not (Test-ProvisionerScriptContent -Content $scriptContent)) {
     Write-Host "  [-] Downloaded script failed validation (incomplete, corrupt, or not the expected file)." -ForegroundColor Red
     Write-Host "  [i] Nothing was saved or run. Check your connection and try again." -ForegroundColor Gray
+    Write-Host ""
+    Read-Host "  Press Enter to exit"
+    exit 1
+}
+
+if (-not (Test-ProvisionerScriptHash -Content $scriptContent -ExpectedHash $expectedProvisionerHash)) {
+    Write-Host "  [-] Downloaded script failed the integrity check (SHA256 mismatch)." -ForegroundColor Red
+    Write-Host "  [i] The file does not match the version this installer was pinned to. Nothing was saved or run." -ForegroundColor Gray
+    Write-Host "  [i] Re-run the latest installer from the project page; if it keeps failing, open an issue." -ForegroundColor Gray
     Write-Host ""
     Read-Host "  Press Enter to exit"
     exit 1
