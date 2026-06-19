@@ -10,10 +10,19 @@ All notable changes to VirtualBox Auto-Installer are documented here.
   carry the admin requirement header and the `New-FedoraVM` entry point,
   which replaces the old length-only check and stops a truncated download,
   an HTML error page, or a captive-portal redirect from being executed
-  (part of #4). Full signature verification is still tracked as follow-up.
+  (part of #4).
+- `install.ps1` now pins the SHA256 of the provisioner and refuses any
+  download whose hash doesn't match, so a tampered-but-parseable script is
+  no longer trusted (closes #4). The hash is taken over a canonical form
+  (line endings normalized to LF, a leading BOM dropped, UTF-8) so it holds
+  across a CRLF checkout and the LF copy GitHub serves. Code signing is left
+  as a possible later step rather than a requirement.
 
 ### Added
 - Pester coverage for the new installer validator
+- Pester coverage for the provisioner hash check, plus a guard test that fails
+  if the pinned hash drifts from the committed script
+- `tools/Update-InstallerHash.ps1` to recompute the pin in one command
 - `install.ps1` is now linted by PSScriptAnalyzer in CI alongside the main script
 
 ## [1.1.0] — 2026-04-12
