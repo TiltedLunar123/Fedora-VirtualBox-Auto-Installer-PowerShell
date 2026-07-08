@@ -24,6 +24,9 @@ All notable changes to VirtualBox Auto-Installer are documented here.
   if the pinned hash drifts from the committed script
 - `tools/Update-InstallerHash.ps1` to recompute the pin in one command
 - `install.ps1` is now linted by PSScriptAnalyzer in CI alongside the main script
+- Pester coverage for `Get-VMState`, `Remove-InstallArtifacts`, and
+  `Remove-ExistingVM`, so the state parsing, artifact cleanup, and existing-VM
+  detection are exercised instead of running untested
 
 ## [1.1.0] — 2026-04-12
 
