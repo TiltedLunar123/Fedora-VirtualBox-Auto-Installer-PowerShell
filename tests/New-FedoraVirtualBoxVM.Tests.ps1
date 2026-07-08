@@ -780,3 +780,41 @@ Describe "Find-ChecksumFileName (#7)" {
         Find-ChecksumFileName -ListingContent '' | Should -BeNullOrEmpty
     }
 }
+
+Describe "Get-VMState" {
+    It "Pulls the state value out of machine-readable output" {
+        Mock Invoke-VBoxManage {
+            'name="Fedora-Workstation"' + "`n" + 'VMState="running"' + "`n" + 'VMStateChangeTime="2026-07-08T00:00:00.000000000"'
+        }
+        Get-VMState -VBoxManage "vbox" -VMName "Fedora-Workstation" | Should -Be "running"
+    }
+
+    It "Reports poweroff when the guest is off" {
+        Mock Invoke-VBoxManage { 'VMState="poweroff"' }
+        Get-VMState -VBoxManage "vbox" -VMName "vm" | Should -Be "poweroff"
+    }
+
+    It "Strips the surrounding quotes from the value" {
+        Mock Invoke-VBoxManage { 'VMState="saved"' }
+        Get-VMState -VBoxManage "vbox" -VMName "vm" | Should -Be "saved"
+    }
+
+    It "Does not pick up VMStateChangeTime instead of VMState" {
+        # VMStateChangeTime shares the VMState prefix, so a loose match would
+        # grab the wrong line. Put it first and confirm the real line still wins.
+        Mock Invoke-VBoxManage {
+            'VMStateChangeTime="2026-07-08T00:00:00.000000000"' + "`n" + 'VMState="running"'
+        }
+        Get-VMState -VBoxManage "vbox" -VMName "vm" | Should -Be "running"
+    }
+
+    It "Returns an empty string when there is no VMState line" {
+        Mock Invoke-VBoxManage { 'name="vm"' + "`n" + 'CfgFile="C:\VMs\vm.vbox"' }
+        Get-VMState -VBoxManage "vbox" -VMName "vm" | Should -Be ""
+    }
+
+    It "Returns an empty string when the command produces no output" {
+        Mock Invoke-VBoxManage { "" }
+        Get-VMState -VBoxManage "vbox" -VMName "missing" | Should -Be ""
+    }
+}
