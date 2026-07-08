@@ -818,3 +818,38 @@ Describe "Get-VMState" {
         Get-VMState -VBoxManage "vbox" -VMName "missing" | Should -Be ""
     }
 }
+
+Describe "Remove-InstallArtifacts" {
+    BeforeEach {
+        $workDir = Join-Path $env:TEMP "pester-artifacts-$(Get-Random)"
+        New-Item -Path $workDir -ItemType Directory -Force | Out-Null
+    }
+
+    AfterEach {
+        Remove-Item $workDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It "Removes both ks.cfg and the OEMDRV disk" {
+        Set-Content -Path (Join-Path $workDir "ks.cfg") -Value "kickstart"
+        Set-Content -Path (Join-Path $workDir "OEMDRV.vhd") -Value "disk"
+
+        Remove-InstallArtifacts -WorkDir $workDir
+
+        Test-Path (Join-Path $workDir "ks.cfg")     | Should -BeFalse
+        Test-Path (Join-Path $workDir "OEMDRV.vhd") | Should -BeFalse
+    }
+
+    It "Leaves the provision state file and anything else in place" {
+        Set-Content -Path (Join-Path $workDir "provision-state.json") -Value "{}"
+        Set-Content -Path (Join-Path $workDir "keepme.txt") -Value "keep"
+
+        Remove-InstallArtifacts -WorkDir $workDir
+
+        Test-Path (Join-Path $workDir "provision-state.json") | Should -BeTrue
+        Test-Path (Join-Path $workDir "keepme.txt")           | Should -BeTrue
+    }
+
+    It "Does not throw when the artifacts are already gone" {
+        { Remove-InstallArtifacts -WorkDir $workDir } | Should -Not -Throw
+    }
+}
