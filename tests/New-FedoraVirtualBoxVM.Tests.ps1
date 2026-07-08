@@ -853,3 +853,48 @@ Describe "Remove-InstallArtifacts" {
         { Remove-InstallArtifacts -WorkDir $workDir } | Should -Not -Throw
     }
 }
+
+Describe "Remove-ExistingVM" {
+    BeforeAll {
+        # Quiet the banner output these tests would otherwise print.
+        Mock Write-Host {}
+    }
+
+    It "Throws when the VM exists and -Force is not set" {
+        $Force = $false
+        Mock Invoke-VBoxManage { '"Fedora-Workstation" {12345678-1234-1234-1234-1234567890ab}' }
+        { Remove-ExistingVM -VBoxManage "vbox" -VMName "Fedora-Workstation" } |
+            Should -Throw "*already exists*"
+    }
+
+    It "Returns quietly when the VM is not in the list" {
+        $Force = $false
+        Mock Invoke-VBoxManage { '"Some-Other-VM" {12345678-1234-1234-1234-1234567890ab}' }
+        { Remove-ExistingVM -VBoxManage "vbox" -VMName "Fedora-Workstation" } |
+            Should -Not -Throw
+    }
+
+    It "Does not treat a name that is only a prefix of another VM as a match" {
+        # The check is anchored on the quoted name, so "Fedora-Workstation" must
+        # not fire on "Fedora-Workstation-2".
+        $Force = $false
+        Mock Invoke-VBoxManage { '"Fedora-Workstation-2" {12345678-1234-1234-1234-1234567890ab}' }
+        { Remove-ExistingVM -VBoxManage "vbox" -VMName "Fedora-Workstation" } |
+            Should -Not -Throw
+    }
+
+    It "Escapes regex metacharacters in the VM name" {
+        # A dot in the name has to match literally, not as a regex wildcard.
+        $Force = $false
+        Mock Invoke-VBoxManage { '"my.vm" {12345678-1234-1234-1234-1234567890ab}' }
+        { Remove-ExistingVM -VBoxManage "vbox" -VMName "my.vm" } |
+            Should -Throw "*already exists*"
+    }
+
+    It "Does not let a dot in the name match a different character" {
+        $Force = $false
+        Mock Invoke-VBoxManage { '"myXvm" {12345678-1234-1234-1234-1234567890ab}' }
+        { Remove-ExistingVM -VBoxManage "vbox" -VMName "my.vm" } |
+            Should -Not -Throw
+    }
+}
