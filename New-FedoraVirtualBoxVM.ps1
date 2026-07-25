@@ -617,10 +617,47 @@ function Test-ISOChecksum {
     $actualHash = (Get-FileHash -Path $ISOPath -Algorithm SHA256).Hash.ToLower()
 
     if ($actualHash -ne $expectedHash) {
-        throw "ISO checksum mismatch!`n  Expected: $expectedHash`n  Actual:   $actualHash`n  The downloaded ISO may be corrupted. Delete it and retry."
+        throw "ISO checksum mismatch!`n  Expected: $expectedHash`n  Actual:   $actualHash`n  The ISO may be corrupted or tampered with."
     }
 
     Write-Step "ISO checksum verified (SHA256 match)" "DONE"
+}
+
+function Invoke-ISOChecksumGate {
+    param(
+        [Parameter(Mandatory)][string]$ISOPath,
+        [Parameter(Mandatory)][string]$IndexUrl
+    )
+
+    # An ISO that failed verification is worse left on disk than deleted: the
+    # local-ISO lookup in Get-FedoraNetinstISO finds it on the next run and
+    # hands it straight back. Delete it here so a retry returns to the mirror.
+    try {
+        Test-ISOChecksum -ISOPath $ISOPath -IndexUrl $IndexUrl
+    }
+    catch {
+        Remove-Item -LiteralPath $ISOPath -Force -ErrorAction SilentlyContinue
+        Write-Step "Deleted the ISO that failed verification: $ISOPath" "WARN"
+        throw
+    }
+}
+
+function ConvertTo-ISOFileFilter {
+    param(
+        [Parameter(Mandatory)][string]$ISOPattern
+    )
+
+    # ISOPattern is a regex matched against the mirror's index listing. The
+    # same string has to become a filesystem wildcard for the already-
+    # downloaded check. Each character class has to go together with the
+    # quantifier behind it, or the quantifier survives into the filter as a
+    # literal character and no file on disk can ever match. Fedora's pattern
+    # ends in [0-9.]+ and used to yield a filter ending in *+.iso.
+    $filter = $ISOPattern -replace '\[[^\]]*\][*+?]?', '*'
+    $filter = $filter -replace '\\[dwsDWS][*+?]?', '*'
+    $filter = $filter -replace '\*{2,}', '*'
+
+    return "$filter.iso"
 }
 
 function Get-FedoraNetinstISO {
@@ -649,12 +686,16 @@ function Get-FedoraNetinstISO {
     }
 
     $isoPattern = $distroConfig.ISOPattern
-    $existing = Get-ChildItem -Path $downloadDir -Filter "$($isoPattern -replace '\[.+\]','*').iso" -File -ErrorAction SilentlyContinue |
+    $existing = Get-ChildItem -Path $downloadDir -Filter (ConvertTo-ISOFileFilter -ISOPattern $isoPattern) -File -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
 
     if ($existing) {
         Write-Step "Found local ISO: $($existing.FullName)" "DONE"
+        # Reusing a download still means verifying it. This file may be a
+        # partial transfer from an interrupted run, and nothing else on the
+        # reuse path looks at its contents.
+        Invoke-ISOChecksumGate -ISOPath $existing.FullName -IndexUrl $distroConfig.ISOIndexUrl
         return $existing.FullName
     }
 
@@ -706,7 +747,7 @@ function Get-FedoraNetinstISO {
     }
 
     # Verify checksum for downloaded ISOs
-    Test-ISOChecksum -ISOPath $isoPath -IndexUrl $indexUrl
+    Invoke-ISOChecksumGate -ISOPath $isoPath -IndexUrl $indexUrl
 
     Write-Step "ISO ready: $isoPath" "DONE"
     return $isoPath

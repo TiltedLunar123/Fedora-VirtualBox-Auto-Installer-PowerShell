@@ -39,7 +39,7 @@ $repoBase = "https://raw.githubusercontent.com/TiltedLunar123/Fedora-VirtualBox-
 # rejected instead of executed (issue #4). Regenerate with
 # tools/Update-InstallerHash.ps1 whenever the provisioner changes;
 # tests/install.Tests.ps1 fails CI if this drifts from the committed script.
-$expectedProvisionerHash = '3731f1d22212eebfaaf5fd3a1cf40a1b21afa10d4fae8a78d1a5c266ec606088'
+$expectedProvisionerHash = '63d7fcd2ee89bed190521c347d9305eb17e46b18856d0dfceed890ff500ede9b'
 
 function Test-ProvisionerScriptContent {
     <#

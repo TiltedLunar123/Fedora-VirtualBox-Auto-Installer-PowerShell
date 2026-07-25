@@ -27,6 +27,26 @@ All notable changes to VirtualBox Auto-Installer are documented here.
 - Pester coverage for `Get-VMState`, `Remove-InstallArtifacts`, and
   `Remove-ExistingVM`, so the state parsing, artifact cleanup, and existing-VM
   detection are exercised instead of running untested
+- Pester coverage for `Test-ISOChecksum` manifest parsing, covering both the
+  BSD `SHA256 (file) = hash` layout Fedora publishes and the GNU
+  `hash  file` layout the other distros use, plus the mismatch, missing-entry,
+  and unreachable-mirror paths
+- `ConvertTo-ISOFileFilter`, with tests running all four distro patterns
+  against the ISO names the mirrors actually serve
+
+### Fixed
+- An ISO reused from a previous run is now verified before it is used.
+  `Get-FedoraNetinstISO` returned a file it found in the download directory
+  without checking it, so a partial transfer from an interrupted run was
+  treated as good. A failed checksum also left the bad ISO on disk, so the
+  retry it told you to run found the same file and skipped verification
+  entirely. Failed ISOs are deleted now, and a retry goes back to the mirror.
+- The already-downloaded ISO check works again for Fedora. The filename
+  filter is derived from the distro's regex pattern, and collapsing the
+  character class left the quantifier behind, so Fedora's filter ended in
+  `*+.iso` and matched nothing that exists. Every run re-downloaded an ISO it
+  already had. Fedora is the default distro; AlmaLinux, Rocky, and
+  CentOS-Stream were unaffected.
 
 ## [1.1.0] — 2026-04-12
 

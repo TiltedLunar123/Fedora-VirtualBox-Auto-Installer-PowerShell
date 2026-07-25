@@ -50,7 +50,11 @@ These files are stored in `<VM directory>/_autoinstall/` during provisioning. Us
 
 ## ISO Verification
 
-Downloaded ISOs are verified against the official SHA256 checksum file published by the distribution. User-provided ISOs (via `-ISOPath`) skip this verification — users are responsible for verifying ISOs they supply manually.
+ISOs the script downloads are verified against the official SHA256 checksum file published by the distribution. So are ISOs it reuses from an earlier run, since a truncated or corrupted transfer looks exactly like a good one until you hash it. An ISO that fails verification is deleted, so a retry goes back to the mirror rather than picking the same bad file up again.
+
+User-provided ISOs skip this check, whether they arrive through `-ISOPath` or the `-SkipDownload` file dialog. Verifying those is on you.
+
+Verification is best-effort against mirror availability. When the checksum manifest cannot be fetched, or it does not list the file, the script warns and keeps going instead of failing. That keeps the tool usable offline and against mirrors that lay their directories out differently. A manifest that is reachable and disagrees with the file is always fatal.
 
 ## Reporting a Vulnerability
 
