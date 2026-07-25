@@ -898,3 +898,148 @@ Describe "Remove-ExistingVM" {
             Should -Not -Throw
     }
 }
+
+Describe "Test-ISOChecksum" {
+    BeforeAll {
+        Mock Write-Host {}
+    }
+
+    BeforeEach {
+        $script:isoName = "Fedora-Everything-netinst-x86_64-43-1.1.iso"
+        $script:isoDir  = Join-Path $env:TEMP "pester-isocheck-$(Get-Random)"
+        New-Item -Path $script:isoDir -ItemType Directory -Force | Out-Null
+        $script:isoPath = Join-Path $script:isoDir $script:isoName
+        Set-Content -Path $script:isoPath -Value "pretend this is an installer image" -NoNewline
+        $script:realHash = (Get-FileHash -Path $script:isoPath -Algorithm SHA256).Hash.ToLower()
+        $script:listing  = 'href="Fedora-43-1.1-x86_64-CHECKSUM"'
+    }
+
+    AfterEach {
+        Remove-Item $script:isoDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It "Accepts a BSD-style manifest whose hash matches" {
+        # Fedora ships "SHA256 (file) = hash" inside a clearsigned CHECKSUM file.
+        $script:manifest = "# comment line`nSHA256 ($script:isoName) = $script:realHash"
+        Mock Invoke-WebRequest {
+            if ($Uri -like '*CHECKSUM*') { [PSCustomObject]@{ Content = $script:manifest } }
+            else { [PSCustomObject]@{ Content = $script:listing } }
+        }
+        { Test-ISOChecksum -ISOPath $script:isoPath -IndexUrl "https://mirror.example/iso/" } |
+            Should -Not -Throw
+    }
+
+    It "Accepts a GNU-style manifest whose hash matches" {
+        $script:manifest = "$script:realHash  $script:isoName"
+        Mock Invoke-WebRequest {
+            if ($Uri -like '*CHECKSUM*') { [PSCustomObject]@{ Content = $script:manifest } }
+            else { [PSCustomObject]@{ Content = $script:listing } }
+        }
+        { Test-ISOChecksum -ISOPath $script:isoPath -IndexUrl "https://mirror.example/iso/" } |
+            Should -Not -Throw
+    }
+
+    It "Accepts a GNU-style manifest that marks the file as binary" {
+        $script:manifest = "$script:realHash *$script:isoName"
+        Mock Invoke-WebRequest {
+            if ($Uri -like '*CHECKSUM*') { [PSCustomObject]@{ Content = $script:manifest } }
+            else { [PSCustomObject]@{ Content = $script:listing } }
+        }
+        { Test-ISOChecksum -ISOPath $script:isoPath -IndexUrl "https://mirror.example/iso/" } |
+            Should -Not -Throw
+    }
+
+    It "Throws when the published hash does not match the file" {
+        $script:manifest = "SHA256 ($script:isoName) = $('a' * 64)"
+        Mock Invoke-WebRequest {
+            if ($Uri -like '*CHECKSUM*') { [PSCustomObject]@{ Content = $script:manifest } }
+            else { [PSCustomObject]@{ Content = $script:listing } }
+        }
+        { Test-ISOChecksum -ISOPath $script:isoPath -IndexUrl "https://mirror.example/iso/" } |
+            Should -Throw "*checksum mismatch*"
+    }
+
+    It "Ignores an entry for a different file in the same manifest" {
+        # A manifest lists every image in the directory. Picking the wrong line
+        # would fail a good ISO.
+        $script:manifest = "SHA256 (Fedora-Server-netinst-x86_64-43-1.1.iso) = $('b' * 64)`nSHA256 ($script:isoName) = $script:realHash"
+        Mock Invoke-WebRequest {
+            if ($Uri -like '*CHECKSUM*') { [PSCustomObject]@{ Content = $script:manifest } }
+            else { [PSCustomObject]@{ Content = $script:listing } }
+        }
+        { Test-ISOChecksum -ISOPath $script:isoPath -IndexUrl "https://mirror.example/iso/" } |
+            Should -Not -Throw
+    }
+
+    It "Warns instead of failing when the file is absent from the manifest" {
+        $script:manifest = "SHA256 (some-other-image.iso) = $('c' * 64)"
+        Mock Invoke-WebRequest {
+            if ($Uri -like '*CHECKSUM*') { [PSCustomObject]@{ Content = $script:manifest } }
+            else { [PSCustomObject]@{ Content = $script:listing } }
+        }
+        { Test-ISOChecksum -ISOPath $script:isoPath -IndexUrl "https://mirror.example/iso/" } |
+            Should -Not -Throw
+    }
+
+    It "Warns instead of failing when the index listing is unreachable" {
+        Mock Invoke-WebRequest { throw "network is down" }
+        { Test-ISOChecksum -ISOPath $script:isoPath -IndexUrl "https://mirror.example/iso/" } |
+            Should -Not -Throw
+    }
+
+    It "Warns instead of failing when the manifest download fails" {
+        Mock Invoke-WebRequest {
+            if ($Uri -like '*CHECKSUM*') { throw "404" }
+            [PSCustomObject]@{ Content = $script:listing }
+        }
+        { Test-ISOChecksum -ISOPath $script:isoPath -IndexUrl "https://mirror.example/iso/" } |
+            Should -Not -Throw
+    }
+
+    It "Warns instead of failing when the listing has no manifest at all" {
+        Mock Invoke-WebRequest { [PSCustomObject]@{ Content = 'href="boot.iso" href="README.txt"' } }
+        { Test-ISOChecksum -ISOPath $script:isoPath -IndexUrl "https://mirror.example/iso/" } |
+            Should -Not -Throw
+    }
+}
+
+Describe "Invoke-ISOChecksumGate" {
+    BeforeAll {
+        Mock Write-Host {}
+    }
+
+    BeforeEach {
+        $script:gateDir = Join-Path $env:TEMP "pester-isogate-$(Get-Random)"
+        New-Item -Path $script:gateDir -ItemType Directory -Force | Out-Null
+        $script:gateIso = Join-Path $script:gateDir "Fedora-Everything-netinst-x86_64-43-1.1.iso"
+        Set-Content -Path $script:gateIso -Value "image bytes" -NoNewline
+    }
+
+    AfterEach {
+        Remove-Item $script:gateDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It "Deletes the ISO when verification fails" {
+        # Leaving a bad ISO on disk is what let the next run reuse it and skip
+        # verification entirely.
+        Mock Test-ISOChecksum { throw "ISO checksum mismatch!" }
+        { Invoke-ISOChecksumGate -ISOPath $script:gateIso -IndexUrl "https://mirror.example/iso/" } |
+            Should -Throw "*checksum mismatch*"
+        Test-Path $script:gateIso | Should -BeFalse
+    }
+
+    It "Keeps the ISO when verification passes" {
+        Mock Test-ISOChecksum {}
+        { Invoke-ISOChecksumGate -ISOPath $script:gateIso -IndexUrl "https://mirror.example/iso/" } |
+            Should -Not -Throw
+        Test-Path $script:gateIso | Should -BeTrue
+    }
+
+    It "Keeps the ISO when the mirror is unreachable and verification is skipped" {
+        # Test-ISOChecksum warns and returns on network trouble, so an offline
+        # run must not lose the image it already has.
+        Mock Test-ISOChecksum {}
+        Invoke-ISOChecksumGate -ISOPath $script:gateIso -IndexUrl "https://mirror.example/iso/"
+        Test-Path $script:gateIso | Should -BeTrue
+    }
+}

@@ -617,10 +617,29 @@ function Test-ISOChecksum {
     $actualHash = (Get-FileHash -Path $ISOPath -Algorithm SHA256).Hash.ToLower()
 
     if ($actualHash -ne $expectedHash) {
-        throw "ISO checksum mismatch!`n  Expected: $expectedHash`n  Actual:   $actualHash`n  The downloaded ISO may be corrupted. Delete it and retry."
+        throw "ISO checksum mismatch!`n  Expected: $expectedHash`n  Actual:   $actualHash`n  The ISO may be corrupted or tampered with."
     }
 
     Write-Step "ISO checksum verified (SHA256 match)" "DONE"
+}
+
+function Invoke-ISOChecksumGate {
+    param(
+        [Parameter(Mandatory)][string]$ISOPath,
+        [Parameter(Mandatory)][string]$IndexUrl
+    )
+
+    # An ISO that failed verification is worse left on disk than deleted: the
+    # local-ISO lookup in Get-FedoraNetinstISO finds it on the next run and
+    # hands it straight back. Delete it here so a retry returns to the mirror.
+    try {
+        Test-ISOChecksum -ISOPath $ISOPath -IndexUrl $IndexUrl
+    }
+    catch {
+        Remove-Item -LiteralPath $ISOPath -Force -ErrorAction SilentlyContinue
+        Write-Step "Deleted the ISO that failed verification: $ISOPath" "WARN"
+        throw
+    }
 }
 
 function Get-FedoraNetinstISO {
@@ -655,6 +674,10 @@ function Get-FedoraNetinstISO {
 
     if ($existing) {
         Write-Step "Found local ISO: $($existing.FullName)" "DONE"
+        # Reusing a download still means verifying it. This file may be a
+        # partial transfer from an interrupted run, and nothing else on the
+        # reuse path looks at its contents.
+        Invoke-ISOChecksumGate -ISOPath $existing.FullName -IndexUrl $distroConfig.ISOIndexUrl
         return $existing.FullName
     }
 
@@ -706,7 +729,7 @@ function Get-FedoraNetinstISO {
     }
 
     # Verify checksum for downloaded ISOs
-    Test-ISOChecksum -ISOPath $isoPath -IndexUrl $indexUrl
+    Invoke-ISOChecksumGate -ISOPath $isoPath -IndexUrl $indexUrl
 
     Write-Step "ISO ready: $isoPath" "DONE"
     return $isoPath
