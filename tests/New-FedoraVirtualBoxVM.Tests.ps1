@@ -899,6 +899,57 @@ Describe "Remove-ExistingVM" {
     }
 }
 
+Describe "ConvertTo-ISOFileFilter" {
+    It "Builds a Fedora filter that matches the real ISO name" {
+        # The old derivation collapsed [0-9.] but left the + behind, so the
+        # filter ended in *+.iso and matched nothing that exists.
+        $filter = ConvertTo-ISOFileFilter -ISOPattern "Fedora-Everything-netinst-x86_64-43-[0-9.]+"
+        $filter | Should -Be "Fedora-Everything-netinst-x86_64-43-*.iso"
+        "Fedora-Everything-netinst-x86_64-43-1.1.iso" | Should -BeLike $filter
+    }
+
+    It "Leaves no regex quantifier in the Fedora filter" {
+        ConvertTo-ISOFileFilter -ISOPattern "Fedora-Everything-netinst-x86_64-43-[0-9.]+" |
+            Should -Not -Match '\+'
+    }
+
+    It "Builds an AlmaLinux filter that matches the real ISO name" {
+        $filter = ConvertTo-ISOFileFilter -ISOPattern "AlmaLinux-9[0-9.]*-x86_64-dvd"
+        "AlmaLinux-9.6-x86_64-dvd.iso" | Should -BeLike $filter
+    }
+
+    It "Builds a Rocky filter that matches the real ISO name" {
+        $filter = ConvertTo-ISOFileFilter -ISOPattern "Rocky-9[0-9.]*-x86_64-dvd"
+        "Rocky-9.6-x86_64-dvd.iso" | Should -BeLike $filter
+    }
+
+    It "Passes a CentOS-Stream pattern through untouched apart from the extension" {
+        ConvertTo-ISOFileFilter -ISOPattern "CentOS-Stream-9-latest-x86_64-dvd1" |
+            Should -Be "CentOS-Stream-9-latest-x86_64-dvd1.iso"
+    }
+
+    It "Collapses a shorthand class and its quantifier too" {
+        # Nothing ships \d today, but the next distro added might.
+        ConvertTo-ISOFileFilter -ISOPattern 'Something-\d+-x86_64' |
+            Should -Be "Something-*-x86_64.iso"
+    }
+
+    It "Collapses runs of wildcards into one" {
+        ConvertTo-ISOFileFilter -ISOPattern "Alma-[0-9]*[0-9]*-dvd" |
+            Should -Be "Alma-*-dvd.iso"
+    }
+
+    It "Does not match an unrelated distro's ISO" {
+        $filter = ConvertTo-ISOFileFilter -ISOPattern "Fedora-Everything-netinst-x86_64-43-[0-9.]+"
+        "AlmaLinux-9.6-x86_64-dvd.iso" | Should -Not -BeLike $filter
+    }
+
+    It "Does not match a different Fedora release" {
+        $filter = ConvertTo-ISOFileFilter -ISOPattern "Fedora-Everything-netinst-x86_64-43-[0-9.]+"
+        "Fedora-Everything-netinst-x86_64-42-1.1.iso" | Should -Not -BeLike $filter
+    }
+}
+
 Describe "Test-ISOChecksum" {
     BeforeAll {
         Mock Write-Host {}

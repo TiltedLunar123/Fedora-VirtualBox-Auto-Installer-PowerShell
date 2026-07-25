@@ -642,6 +642,24 @@ function Invoke-ISOChecksumGate {
     }
 }
 
+function ConvertTo-ISOFileFilter {
+    param(
+        [Parameter(Mandatory)][string]$ISOPattern
+    )
+
+    # ISOPattern is a regex matched against the mirror's index listing. The
+    # same string has to become a filesystem wildcard for the already-
+    # downloaded check. Each character class has to go together with the
+    # quantifier behind it, or the quantifier survives into the filter as a
+    # literal character and no file on disk can ever match. Fedora's pattern
+    # ends in [0-9.]+ and used to yield a filter ending in *+.iso.
+    $filter = $ISOPattern -replace '\[[^\]]*\][*+?]?', '*'
+    $filter = $filter -replace '\\[dwsDWS][*+?]?', '*'
+    $filter = $filter -replace '\*{2,}', '*'
+
+    return "$filter.iso"
+}
+
 function Get-FedoraNetinstISO {
     param(
         [Parameter(Mandatory)][string]$Version,
@@ -668,7 +686,7 @@ function Get-FedoraNetinstISO {
     }
 
     $isoPattern = $distroConfig.ISOPattern
-    $existing = Get-ChildItem -Path $downloadDir -Filter "$($isoPattern -replace '\[.+\]','*').iso" -File -ErrorAction SilentlyContinue |
+    $existing = Get-ChildItem -Path $downloadDir -Filter (ConvertTo-ISOFileFilter -ISOPattern $isoPattern) -File -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
 
