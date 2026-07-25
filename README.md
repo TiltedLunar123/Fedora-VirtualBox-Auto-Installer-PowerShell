@@ -153,7 +153,9 @@ By default, the guest user gets passwordless sudo (`NOPASSWD: ALL`). Use `-Secur
 
 ### ISO Checksum Verification
 
-Downloaded ISOs are automatically verified against the official SHA256 checksum file from the distribution mirror. User-provided ISOs (via `-ISOPath`) skip this check.
+ISOs the script downloads are verified against the official SHA256 checksum file from the distribution mirror, and so are ISOs it finds already sitting in your Downloads folder from a previous run. One that fails the check is deleted, so the next run fetches a clean copy instead of reusing it. User-provided ISOs (via `-ISOPath`) skip this check.
+
+If the mirror's checksum manifest cannot be reached, the script warns and carries on rather than refusing to run. A manifest that is reachable and disagrees with the file always stops the run.
 
 ### Installer Integrity
 
