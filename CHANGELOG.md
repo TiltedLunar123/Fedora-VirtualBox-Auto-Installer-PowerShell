@@ -48,7 +48,7 @@ All notable changes to VirtualBox Auto-Installer are documented here.
   already had. Fedora is the default distro; AlmaLinux, Rocky, and
   CentOS-Stream were unaffected.
 
-## [1.1.0] — 2026-04-12
+## [1.1.0] - 2026-04-12
 
 ### Added
 - `CHANGELOG.md` for version history
@@ -66,7 +66,7 @@ All notable changes to VirtualBox Auto-Installer are documented here.
 ### Fixed
 - CI workflow now triggers on `master` branch pushes in addition to `main`
 
-## [1.0.0] — 2026-03-01
+## [1.0.0] - 2026-03-01
 
 ### Added
 - Fully automatic RHEL-family VM provisioning for VirtualBox on Windows

@@ -43,8 +43,8 @@ This script requires **Administrator privileges** because creating VHD disk imag
 
 After installation completes, the script removes:
 
-1. `ks.cfg` — Contains the Kickstart configuration including the hashed password
-2. `OEMDRV.vhd` — The temporary disk image that delivered the Kickstart file
+1. `ks.cfg`, Contains the Kickstart configuration including the hashed password
+2. `OEMDRV.vhd`, The temporary disk image that delivered the Kickstart file
 
 These files are stored in `<VM directory>/_autoinstall/` during provisioning. Use `-KeepArtifacts` only for debugging purposes.
 
