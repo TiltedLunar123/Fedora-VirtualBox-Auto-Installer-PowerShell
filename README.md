@@ -26,7 +26,7 @@ This downloads the script to `%USERPROFILE%\Fedora-VirtualBox-Auto-Installer\` a
 | **AlmaLinux** | `@^server-product-environment` | `alma-vm` |
 | **Rocky** | `@^server-product-environment` | `rocky-vm` |
 
-All distributions use the same Kickstart-based automation. The script automatically selects the correct ISO download URL, package groups, and OS type for each distro.
+All distributions use the same Kickstart-based automation. The script automatically chooses the correct ISO download URL, package groups, and OS type for each distro.
 
 ## Why This Script Exists
 
@@ -134,7 +134,7 @@ The shared folder will be available inside the VM at `/mnt/shared`.
 | `-KeepArtifacts` | Switch | -- | Keep `ks.cfg` and `OEMDRV.vhd` after install |
 | `-Resume` | Switch | -- | Resume a failed run from saved state without replacing the VM |
 | `-NoResume` | Switch | -- | Ignore saved state; start provisioning from scratch |
-| `-SecureSudo` | Switch | -- | Require password for sudo (no NOPASSWD) |
+| `-SecureSudo` | Switch | -- | Require a password for sudo (no NOPASSWD) |
 | `-SharedFolder` | String | -- | Host path to share with the guest VM |
 
 ## Security
@@ -149,11 +149,11 @@ After installation completes, the script automatically deletes `ks.cfg` and `OEM
 
 ### Sudo Configuration
 
-By default, the guest user gets passwordless sudo (`NOPASSWD: ALL`). Use `-SecureSudo` to require password authentication for sudo commands.
+By default, the guest user gets passwordless sudo (`NOPASSWD: ALL`). Use `-SecureSudo` to need password authentication for sudo commands.
 
 ### ISO Checksum Verification
 
-ISOs the script downloads are verified against the official SHA256 checksum file from the distribution mirror, and so are ISOs it finds already sitting in your Downloads folder from a previous run. One that fails the check is deleted, so the next run fetches a clean copy instead of reusing it. User-provided ISOs (via `-ISOPath`) skip this check.
+ISOs the script downloads are checked against the official SHA256 checksum file from the distribution mirror, and so are ISOs it finds already sitting in your Downloads folder from a previous run. One that fails the check is deleted, so the next run fetches a clean copy instead of reusing it. User-provided ISOs (via `-ISOPath`) skip this check.
 
 If the mirror's checksum manifest cannot be reached, the script warns and carries on rather than refusing to run. A manifest that is reachable and disagrees with the file always stops the run.
 
@@ -181,7 +181,7 @@ ssh -p 2222 user@localhost
 
 ## Resume / Checkpoint
 
-If provisioning is interrupted, re-run with `-Resume` to pick up from the last completed step. The script tracks progress in `_autoinstall/provision-state.json`. `-Force` also resumes, but it additionally allows replacing an existing VM, so reach for `-Resume` when you only want to continue a partial run. Use `-NoResume` to force starting from scratch.
+If provisioning is interrupted, re-run with `-Resume` to pick up from the last completed step. The script tracks progress in `_autoinstall/provision-state.json`. `-Force` also resumes, but it also allows replacing an existing VM, so reach for `-Resume` when you only want to continue a partial run. Use `-NoResume` to force starting from scratch.
 
 ## Disk Layout
 
