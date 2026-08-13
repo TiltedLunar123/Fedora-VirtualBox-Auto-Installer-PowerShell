@@ -95,24 +95,64 @@ $Script:Colors = @{
     Accent  = "Magenta"
 }
 
-# Emoji fallback for old terminals
-$Script:UseEmoji = $null -ne $env:WT_SESSION -or $Host.UI.SupportsVirtualTerminal
+# Every character above U+007F in this file is built from its code point rather
+# than typed literally, which keeps the source pure ASCII. That matters because
+# Windows PowerShell 5.1 reads a file with no byte-order mark as ANSI: a literal
+# multi-byte character would already be mojibake by the time the parser saw it,
+# and the script would not parse at all.
+function Get-UnicodeString {
+    param([Parameter(Mandatory)][int[]]$CodePoint)
+    -join ($CodePoint | ForEach-Object { [char]$_ })
+}
+
+# Unicode output needs two things: a host that renders it, and an output
+# encoding that can represent it. Windows PowerShell 5.1 in Windows Terminal
+# passes the first test and fails the second, so check both.
+$Script:UseEmoji = $false
+try {
+    $Script:UseEmoji = (
+        ($null -ne $env:WT_SESSION -or $Host.UI.SupportsVirtualTerminal) -and
+        [Console]::OutputEncoding.CodePage -eq 65001
+    )
+} catch {
+    $Script:UseEmoji = $false
+}
+
 $Script:Icons = if ($Script:UseEmoji) {
-    @{ Running="⚡"; Done="✅"; Warn="⚠️"; Error="❌"; Info="ℹ️" }
+    @{
+        Running = Get-UnicodeString 0x26A1          # high voltage
+        Done    = Get-UnicodeString 0x2705          # white heavy check mark
+        Warn    = Get-UnicodeString 0x26A0, 0xFE0F  # warning sign, emoji variant
+        Error   = Get-UnicodeString 0x274C          # cross mark
+        Info    = Get-UnicodeString 0x2139, 0xFE0F  # information, emoji variant
+    }
 } else {
     @{ Running=">>"; Done="OK"; Warn="!!"; Error="XX"; Info="--" }
 }
 
 function Write-Banner {
-    $banner = @"
+    $inner = 58
+    $lines = @(
+        "VIRTUALBOX AUTO-PROVISIONER v5.0",
+        "Real Kickstart Automation via OEMDRV"
+    )
 
-    ╔══════════════════════════════════════════════════════════╗
-    ║     VIRTUALBOX AUTO-PROVISIONER v5.0                    ║
-    ║     Real Kickstart Automation via OEMDRV                ║
-    ╚══════════════════════════════════════════════════════════╝
+    if ($Script:UseEmoji) {
+        $tl = Get-UnicodeString 0x2554; $tr = Get-UnicodeString 0x2557
+        $bl = Get-UnicodeString 0x255A; $br = Get-UnicodeString 0x255D
+        $h  = Get-UnicodeString 0x2550; $v  = Get-UnicodeString 0x2551
+    } else {
+        $tl = "+"; $tr = "+"; $bl = "+"; $br = "+"; $h = "-"; $v = "|"
+    }
 
-"@
-    Write-Host $banner -ForegroundColor $Script:Colors.Accent
+    $bar = $h * $inner
+    $out = @("", "    $tl$bar$tr")
+    foreach ($line in $lines) {
+        $out += "    $v" + ("     " + $line).PadRight($inner) + $v
+    }
+    $out += "    $bl$bar$br", ""
+
+    Write-Host ($out -join [Environment]::NewLine) -ForegroundColor $Script:Colors.Accent
 }
 
 function Write-Step {
@@ -1458,8 +1498,24 @@ function Invoke-ValidateMode {
 
 # --- Main ---
 
+function Clear-HostIfInteractive {
+    # Clear-Host goes through the raw UI, which has no valid console handle when
+    # output is redirected or there is no console at all: CI, a log file, a
+    # wrapper script. Calling it there throws "The handle is invalid", which the
+    # top-level catch then reports as a provisioning failure, so -Validate never
+    # gets to print its results. Skip it instead.
+    try {
+        if ([Environment]::UserInteractive -and -not [Console]::IsOutputRedirected) {
+            Clear-Host
+        }
+    } catch {
+        # A host without a usable console is not a reason to stop provisioning.
+        Write-Verbose "Skipping Clear-Host: $($_.Exception.Message)"
+    }
+}
+
 function Main {
-    Clear-Host
+    Clear-HostIfInteractive
     Write-Banner
 
     # Validate mode: run checks and exit

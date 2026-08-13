@@ -56,7 +56,7 @@ This script takes the cleaner route:
 ## Requirements
 
 - **Windows** 10 or 11
-- **PowerShell** running **as Administrator**
+- **PowerShell** 5.1 (built into Windows) or PowerShell 7, running **as Administrator**
 - **Oracle VirtualBox** installed ([download](https://www.virtualbox.org/wiki/Downloads))
 - Hardware virtualization enabled in BIOS/UEFI (VT-x or AMD-V)
 - Hyper-V / VBS not interfering with VirtualBox
@@ -104,6 +104,11 @@ This script takes the cleaner route:
 
 Runs all pre-flight checks (VirtualBox installed, VT-x, disk space, ISO availability, port conflicts) without creating anything.
 
+![Terminal output from a real -Validate run. Under Pre-Flight Validation it reports VBoxManage found at C:\Program Files\Oracle\VirtualBox\VBoxManage.exe, disk space of 461.8 GB free on C, the ISO download URL reachable, SSH port 2222 available and SHA-512 password hashing available, each marked OK. Two lines are marked with double exclamation marks: VT-x/AMD-V not detected, and Hyper-V status could not be determined. It closes with the result that some checks failed and should be fixed before provisioning.](docs/validate.png)
+
+That capture is a non-elevated run with output redirected to a file, which is
+why two checks cannot report and why the banner falls back to ASCII.
+
 ### Shared Folder
 
 ```powershell
@@ -149,7 +154,7 @@ After installation completes, the script automatically deletes `ks.cfg` and `OEM
 
 ### Sudo Configuration
 
-By default, the guest user gets passwordless sudo (`NOPASSWD: ALL`). Use `-SecureSudo` to need password authentication for sudo commands.
+By default, the guest user gets passwordless sudo (`NOPASSWD: ALL`). Use `-SecureSudo` to require password authentication for sudo commands.
 
 ### ISO Checksum Verification
 

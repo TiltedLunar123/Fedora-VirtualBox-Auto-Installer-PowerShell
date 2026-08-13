@@ -4,7 +4,7 @@
     Downloads the latest version, self-elevates to admin, and prints usage instructions.
 #>
 
-# ── Self-elevate to Administrator if not already ──────────────────────────────
+# -- Self-elevate to Administrator if not already ------------------------------
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "  Requesting Administrator privileges..." -ForegroundColor Yellow
 
@@ -26,7 +26,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     exit
 }
 
-# ── Running as Admin from here ────────────────────────────────────────────────
+# -- Running as Admin from here ------------------------------------------------
 Set-ExecutionPolicy Bypass -Scope Process -Force
 $ErrorActionPreference = "Stop"
 $installDir = Join-Path $env:USERPROFILE "Fedora-VirtualBox-Auto-Installer"
@@ -39,7 +39,7 @@ $repoBase = "https://raw.githubusercontent.com/TiltedLunar123/Fedora-VirtualBox-
 # rejected instead of executed (issue #4). Regenerate with
 # tools/Update-InstallerHash.ps1 whenever the provisioner changes;
 # tests/install.Tests.ps1 fails CI if this drifts from the committed script.
-$expectedProvisionerHash = '63d7fcd2ee89bed190521c347d9305eb17e46b18856d0dfceed890ff500ede9b'
+$expectedProvisionerHash = '1300f3179804ce4a414ed077e22b3bb9186ade17cf3c0422f257dc1e458f04e9'
 
 function Test-ProvisionerScriptContent {
     <#

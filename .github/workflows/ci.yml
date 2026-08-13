@@ -31,6 +31,59 @@ jobs:
             exit 1
           }
 
+  parse-windows-powershell:
+    name: Parse under Windows PowerShell 5.1
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # The rest of CI runs on pwsh 7, which reads a file with no byte-order
+      # mark as UTF-8. Windows PowerShell 5.1 reads the same file as ANSI, so a
+      # literal character above U+007F becomes mojibake and the script stops
+      # parsing. That shipped once already. Two checks below: the encoding rule
+      # that prevents it, and a real 5.1 parse of every script.
+      - name: Every script is ASCII, or carries a UTF-8 BOM
+        shell: powershell
+        run: |
+          $bad = @()
+          Get-ChildItem -Recurse -Filter *.ps1 -File | ForEach-Object {
+            $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+            $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+            $offset = if ($hasBom) { 3 } else { 0 }
+            $high = 0
+            for ($i = $offset; $i -lt $bytes.Length; $i++) { if ($bytes[$i] -gt 0x7F) { $high++ } }
+            if ($high -gt 0 -and -not $hasBom) {
+              $bad += "$($_.FullName): $high non-ASCII byte(s) and no BOM"
+            }
+          }
+          if ($bad.Count) {
+            $bad | ForEach-Object { Write-Host "FAIL $_" }
+            Write-Error "Add a UTF-8 BOM, or build the characters from code points so the source stays ASCII."
+            exit 1
+          }
+          Write-Host "ok: every .ps1 is ASCII or carries a BOM"
+
+      - name: Parse every script with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          "Host: $($PSVersionTable.PSVersion)"
+          $failed = 0
+          Get-ChildItem -Recurse -Filter *.ps1 -File | ForEach-Object {
+            $errors = $null
+            [void][System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw $_.FullName), [ref]$errors)
+            if ($errors.Count) {
+              Write-Host "FAIL $($_.Name): $($errors.Count) parse error(s)"
+              $errors | ForEach-Object { Write-Host "     line $($_.Token.StartLine): $($_.Message)" }
+              $failed++
+            } else {
+              Write-Host "ok   $($_.Name)"
+            }
+          }
+          if ($failed) {
+            Write-Error "$failed script(s) do not parse under Windows PowerShell 5.1."
+            exit 1
+          }
+
   test:
     name: Pester Tests
     runs-on: windows-latest
